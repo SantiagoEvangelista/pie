@@ -1,5 +1,5 @@
 # Credentials and local environment
-auth.json
+/auth.json
 .env
 .env.*
 *.pem
@@ -8,19 +8,19 @@ auth.json
 *.pfx
 
 # Private conversation and runtime state
-sessions/
-workflows/
-compact-backups/
-backups/
-.cache/
-cache/
-pi-crash.log
+/sessions/
+/workflows/
+/compact-backups/
+/backups/
+/.cache/
+/cache/
+/pi-crash.log
 *.log
 
 # Generated catalogs, downloads, and caches
-models-store.json
-bin/
-git/
+/models-store.json
+/bin/
+/git/
 **/node_modules/
 .DS_Store
 

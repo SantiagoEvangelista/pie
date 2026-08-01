@@ -1,5 +1,7 @@
 /** All model-facing strings for the subagents tools. */
 
+import { DELEGATED_MODEL_TIERING_GUIDELINES } from "../../shared/intelligence-tiering.ts";
+
 /** Describes subagent_spawn and the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
   "Spawn a background pi subagent: a fully autonomous, headless, in-process pi session with its own context window and this environment's tools and config. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can run at once.";
@@ -13,6 +15,7 @@ export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
   "All subagents use the in-process pi harness; Claude Code and Codex CLI harnesses are disabled.",
   "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
+  ...DELEGATED_MODEL_TIERING_GUIDELINES,
 ];
 
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
@@ -23,9 +26,9 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   model:
-    'Pi model hint as "provider/model-id" or a model id. Omit to inherit the current model.',
+    'Pi model hint as "provider/model-id" or a model id. Classify task first, then select explicitly: bounded execution tier uses openai-codex/gpt-5.6-terra; advanced reasoning tier uses openai-codex/gpt-5.6-sol. Omit only when inheritance is intentional.',
   reasoningEffort:
-    "Pi thinking level. Omit to inherit the current level.",
+    "Pi thinking level. Prefer low/medium with Terra and high/xhigh with Sol. Omit only when inheritance is intentional.",
 };
 
 /** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */

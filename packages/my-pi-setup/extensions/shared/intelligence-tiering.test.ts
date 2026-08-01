@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { DELEGATED_MODEL_TIERING_GUIDELINES } from "./intelligence-tiering.ts";
+
+const subagentPromptSource = readFileSync(
+  new URL("../subagents/src/prompt.ts", import.meta.url),
+  "utf8",
+);
+const workflowPromptSource = readFileSync(
+  new URL("../workflows/prompt.ts", import.meta.url),
+  "utf8",
+);
+
+test("subagents and workflows share delegated model tiering", () => {
+  assert.match(subagentPromptSource, /\.\.\.DELEGATED_MODEL_TIERING_GUIDELINES/);
+  assert.match(workflowPromptSource, /\.\.\.DELEGATED_MODEL_TIERING_GUIDELINES/);
+  assert.match(
+    workflowPromptSource,
+    /DELEGATED_MODEL_TIERING_GUIDELINES\.map/,
+  );
+});
+
+test("tiering selects Terra and Sol explicitly and rejects Luna", () => {
+  const policy = DELEGATED_MODEL_TIERING_GUIDELINES.join("\n");
+
+  assert.match(policy, /Classify each delegated task/);
+  assert.match(policy, /Bounded execution tier/);
+  assert.match(policy, /Advanced reasoning tier/);
+  assert.match(policy, /Disallowed tier/);
+  assert.match(policy, /openai-codex\/gpt-5\.6-terra/);
+  assert.match(policy, /openai-codex\/gpt-5\.6-sol/);
+  assert.match(policy, /GPT-5\.6 Luna: do not use it/);
+  assert.match(policy, /do not inherit the expensive orchestrator accidentally/);
+  assert.match(subagentPromptSource, /gpt-5\.6-terra/);
+  assert.match(subagentPromptSource, /gpt-5\.6-sol/);
+  assert.match(workflowPromptSource, /model: 'gpt-5\.6-terra'/);
+  assert.match(workflowPromptSource, /model: 'gpt-5\.6-sol'/);
+});
