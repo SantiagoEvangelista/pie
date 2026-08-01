@@ -14,10 +14,6 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 
-const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
-const DISABLE_MOUSE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
-const ENABLE_DRAG_MOUSE = "\x1b[?1002h";
-const DISABLE_DRAG_MOUSE = "\x1b[?1002l";
 const MOUSE_EVENT = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
 const SELECT_START = "\x1b[7m";
 const SELECT_END = "\x1b[27m";
@@ -178,8 +174,7 @@ class MouseSelectionEditor extends CustomEditor {
 	private setSelectionMode(armed: boolean): void {
 		if (this.selectionModeArmed === armed) return;
 		this.selectionModeArmed = armed;
-		if (armed) enableMouse();
-		else disableMouse();
+		this.tui.setMouseMotionTracking(armed);
 		this.onSelectionModeChange(armed);
 	}
 
@@ -453,25 +448,10 @@ class MouseSelectionEditor extends CustomEditor {
 	}
 }
 
-let mouseEnabled = false;
-
-function enableMouse(): void {
-	if (mouseEnabled || !process.stdout.isTTY) return;
-	process.stdout.write(process.env.PI_FIXED_LAYOUT_ACTIVE === "1" ? ENABLE_DRAG_MOUSE : ENABLE_MOUSE);
-	mouseEnabled = true;
-}
-
-function disableMouse(): void {
-	if (!mouseEnabled || !process.stdout.isTTY) return;
-	process.stdout.write(process.env.PI_FIXED_LAYOUT_ACTIVE === "1" ? DISABLE_DRAG_MOUSE : DISABLE_MOUSE);
-	mouseEnabled = false;
-}
-
 export default function mouseTextSelection(pi: ExtensionAPI): void {
 	let editor: MouseSelectionEditor | undefined;
 	let editorTui: TUI | undefined;
 	let unsubscribeInput: (() => void) | undefined;
-	const onExit = (): void => disableMouse();
 
 	pi.on("session_start", (_event, ctx) => {
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
@@ -496,14 +476,12 @@ export default function mouseTextSelection(pi: ExtensionAPI): void {
 			return focused && editor?.isMouseSelectionModeArmed() ? undefined : { consume: true };
 		});
 
-		process.once("exit", onExit);
 	});
 
 	pi.on("session_shutdown", () => {
 		unsubscribeInput?.();
 		unsubscribeInput = undefined;
-		process.off("exit", onExit);
-		disableMouse();
+		editorTui?.setMouseMotionTracking(false);
 		editor = undefined;
 		editorTui = undefined;
 	});

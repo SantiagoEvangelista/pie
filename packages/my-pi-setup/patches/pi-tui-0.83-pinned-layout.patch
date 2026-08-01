@@ -1,9 +1,12 @@
 --- a/dist/tui.js
 +++ b/dist/tui.js
-@@ -105,6 +105,86 @@
-     }
- }
- /**
+@@ -102,7 +102,87 @@
+             }
+         }
+         return lines;
++    }
++}
++/**
 + * Full-height layout with independently scrollable content and bottom-pinned chrome.
 + * The bottom component is always rendered at the terminal edge; unused content rows
 + * are padded so editor/footer components do not move as history grows.
@@ -62,7 +65,7 @@
 +        this.followBottom = true;
 +        this.requestRender();
 +        return true;
-+    }
+     }
 +    render(width) {
 +        const contentLines = this.content.render(width);
 +        const bottomLines = this.bottom.render(width);
@@ -82,21 +85,21 @@
 +        }
 +        return [...visibleContent, ...visibleBottom];
 +    }
-+}
-+/**
+ }
+ /**
   * TUI - Main class for managing terminal UI with differential rendering
-  */
- export class TUI extends Container {
-@@ -133,6 +213,8 @@
+@@ -133,6 +213,10 @@
      pendingOsc11BackgroundQueries = [];
      terminalColorSchemeListeners = new Set();
      terminalColorSchemeNotificationsEnabled = false;
 +    alternateScreen = false;
 +    mouseTracking = false;
++    mouseMotionTracking = false;
++    mouseTrackingActive = false;
      logDirectory;
      // Overlay stack for modal components rendered on top of base content
      focusOrderCounter = 0;
-@@ -172,6 +254,14 @@
+@@ -172,6 +256,23 @@
      setClearOnShrink(enabled) {
          this.clearOnShrink = enabled;
      }
@@ -108,10 +111,19 @@
 +    setMouseTracking(enabled) {
 +        this.mouseTracking = enabled;
 +    }
++    /** Temporarily switch mouse reporting between normal and button-motion modes. */
++    setMouseMotionTracking(enabled) {
++        if (this.mouseMotionTracking === enabled)
++            return;
++        this.mouseMotionTracking = enabled;
++        if (!this.mouseTrackingActive)
++            return;
++        this.terminal.write(enabled ? "\x1b[?1000l\x1b[?1002h" : "\x1b[?1002l\x1b[?1000h");
++    }
      setFocus(component) {
          this.setFocusInternal({ component, overlayFocusRestore: "clear" });
      }
-@@ -432,7 +522,13 @@
+@@ -432,7 +533,14 @@
      }
      start() {
          this.stopped = false;
@@ -120,18 +132,20 @@
 +        }
          this.terminal.start((data) => this.handleInput(data), () => this.requestRender());
 +        if (this.mouseTracking) {
-+            this.terminal.write("\x1b[?1000h\x1b[?1006h");
++            this.mouseTrackingActive = true;
++            this.terminal.write(`${this.mouseMotionTracking ? "\x1b[?1002h" : "\x1b[?1000h"}\x1b[?1006h`);
 +        }
          this.terminal.hideCursor();
          if (this.terminalColorSchemeNotificationsEnabled) {
              this.terminal.write("\x1b[?2031h");
-@@ -481,6 +577,15 @@
+@@ -481,6 +589,16 @@
          }
          if (this.terminalColorSchemeNotificationsEnabled) {
              this.terminal.write("\x1b[?2031l");
 +        }
-+        if (this.mouseTracking) {
-+            this.terminal.write("\x1b[?1006l\x1b[?1000l");
++        if (this.mouseTrackingActive) {
++            this.terminal.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l");
++            this.mouseTrackingActive = false;
 +        }
 +        if (this.alternateScreen) {
 +            this.terminal.showCursor();
@@ -141,7 +155,7 @@
          }
          // Move cursor to the end of the content to prevent overwriting/artifacts on exit
          if (this.previousLines.length > 0) {
-@@ -1409,4 +1514,4 @@
+@@ -1409,4 +1527,4 @@
          });
      }
  }
@@ -181,16 +195,18 @@
      render(width: number): string[];
  }
  /**
-@@ -163,6 +187,8 @@
+@@ -163,6 +187,10 @@
      private pendingOsc11BackgroundQueries;
      private terminalColorSchemeListeners;
      private terminalColorSchemeNotificationsEnabled;
 +    private alternateScreen;
 +    private mouseTracking;
++    private mouseMotionTracking;
++    private mouseTrackingActive;
      private readonly logDirectory;
      private focusOrderCounter;
      private overlayStack;
-@@ -178,6 +204,10 @@
+@@ -178,6 +206,12 @@
       * When false, empty rows remain (reduces redraws on slower terminals).
       */
      setClearOnShrink(enabled: boolean): void;
@@ -198,10 +214,12 @@
 +    setAlternateScreen(enabled: boolean): void;
 +    /** Enable basic SGR mouse events. Wheel events can then drive app-owned scrolling. */
 +    setMouseTracking(enabled: boolean): void;
++    /** Temporarily switch mouse reporting between normal and button-motion modes. */
++    setMouseMotionTracking(enabled: boolean): void;
      setFocus(component: Component | null): void;
      private setFocusInternal;
      private clearOverlayFocusRestore;
-@@ -266,4 +296,4 @@
+@@ -266,4 +300,4 @@
          timeoutMs: number;
      }): Promise<TerminalColorScheme | undefined>;
  }

@@ -25,17 +25,18 @@
  function quoteIfNeeded(value) {
      if (value.length > 0 && !/[^a-zA-Z0-9_\-./~:@]/.test(value)) {
          return value;
-@@ -164,6 +173,9 @@
+@@ -164,6 +173,10 @@
  export class InteractiveMode {
      runtimeHost;
      ui;
 +    scrollContainer;
 +    bottomContainer;
 +    pinnedLayout;
++    pinnedLayoutInputUnsubscribe;
      loadedResourcesContainer;
      chatContainer;
      pendingMessagesContainer;
-@@ -274,7 +286,13 @@
+@@ -274,7 +287,13 @@
          });
          this.version = VERSION;
          this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor(), getAgentDir());
@@ -49,7 +50,7 @@
          this.headerContainer = new Container();
          this.loadedResourcesContainer = new Container();
          this.chatContainer = new Container();
-@@ -481,16 +499,17 @@
+@@ -481,16 +500,17 @@
          }
          // Add header container as first child. Populate it after applying theme settings.
          // Keep loaded resources before chat so restored session messages never precede them.
@@ -76,15 +77,15 @@
          this.ui.setFocus(this.editor);
          this.setupKeyHandlers();
          this.setupEditorSubmitHandler();
-@@ -547,6 +566,7 @@
-         this.ui.requestRender();
-         // Initialize extensions first so resources are shown before messages
-         await this.rebindCurrentSession();
+@@ -1328,6 +1348,7 @@
+         }
+         await this.updateAvailableProviderCount();
+         this.updateEditorBorderColor();
 +        this.setupPinnedLayoutScrolling();
-         // Render initial messages AFTER showing loaded resources
-         this.renderInitialMessages();
-         // Set up theme file watcher
-@@ -1582,20 +1602,20 @@
+         this.updateTerminalTitle();
+     }
+     async handleFatalRuntimeError(prefix, error) {
+@@ -1582,20 +1603,20 @@
          }
          // Remove current footer from UI
          if (this.customFooter) {
@@ -109,12 +110,13 @@
          }
          this.ui.requestRender();
      }
-@@ -2009,6 +2029,35 @@
+@@ -2009,6 +2030,36 @@
      // =========================================================================
      // Key Handlers
      // =========================================================================
 +    setupPinnedLayoutScrolling() {
-+        this.ui.addInputListener((data) => {
++        this.pinnedLayoutInputUnsubscribe?.();
++        this.pinnedLayoutInputUnsubscribe = this.ui.addInputListener((data) => {
 +            if (this.ui.hasOverlay() || this.extensionSelector || this.extensionInput || this.extensionEditor) {
 +                return undefined;
 +            }
@@ -145,7 +147,7 @@
      setupKeyHandlers() {
          // Set up handlers on defaultEditor - they use this.editor for text access
          // so they work correctly regardless of which editor is active
-@@ -2102,6 +2151,7 @@
+@@ -2102,6 +2153,7 @@
      }
      setupEditorSubmitHandler() {
          this.defaultEditor.onSubmit = async (text) => {
@@ -153,7 +155,15 @@
              text = text.trim();
              if (!text)
                  return;
-@@ -5068,4 +5118,4 @@
+@@ -4508,6 +4560,7 @@
+             }
+             this.showError(`Reload failed: ${error instanceof Error ? error.message : String(error)}`);
+         }
++        this.setupPinnedLayoutScrolling();
+     }
+     async handleExportCommand(text) {
+         const outputPath = this.getPathCommandArgument(text, "/export");
+@@ -5068,4 +5121,4 @@
          this.unregisterSignalHandlers();
      }
  }

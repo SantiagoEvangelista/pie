@@ -1,0 +1,69 @@
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -215,6 +215,8 @@
+     terminalColorSchemeNotificationsEnabled = false;
+     alternateScreen = false;
+     mouseTracking = false;
++    mouseMotionTracking = false;
++    mouseTrackingActive = false;
+     logDirectory;
+     // Overlay stack for modal components rendered on top of base content
+     focusOrderCounter = 0;
+@@ -262,6 +264,15 @@
+     setMouseTracking(enabled) {
+         this.mouseTracking = enabled;
+     }
++    /** Temporarily switch mouse reporting between normal and button-motion modes. */
++    setMouseMotionTracking(enabled) {
++        if (this.mouseMotionTracking === enabled)
++            return;
++        this.mouseMotionTracking = enabled;
++        if (!this.mouseTrackingActive)
++            return;
++        this.terminal.write(enabled ? "\x1b[?1000l\x1b[?1002h" : "\x1b[?1002l\x1b[?1000h");
++    }
+     setFocus(component) {
+         this.setFocusInternal({ component, overlayFocusRestore: "clear" });
+     }
+@@ -527,7 +538,8 @@
+         }
+         this.terminal.start((data) => this.handleInput(data), () => this.requestRender());
+         if (this.mouseTracking) {
+-            this.terminal.write("\x1b[?1000h\x1b[?1006h");
++            this.mouseTrackingActive = true;
++            this.terminal.write(`${this.mouseMotionTracking ? "\x1b[?1002h" : "\x1b[?1000h"}\x1b[?1006h`);
+         }
+         this.terminal.hideCursor();
+         if (this.terminalColorSchemeNotificationsEnabled) {
+@@ -578,8 +590,9 @@
+         if (this.terminalColorSchemeNotificationsEnabled) {
+             this.terminal.write("\x1b[?2031l");
+         }
+-        if (this.mouseTracking) {
+-            this.terminal.write("\x1b[?1006l\x1b[?1000l");
++        if (this.mouseTrackingActive) {
++            this.terminal.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l");
++            this.mouseTrackingActive = false;
+         }
+         if (this.alternateScreen) {
+             this.terminal.showCursor();
+--- a/dist/tui.d.ts
++++ b/dist/tui.d.ts
+@@ -189,6 +189,8 @@
+     private terminalColorSchemeNotificationsEnabled;
+     private alternateScreen;
+     private mouseTracking;
++    private mouseMotionTracking;
++    private mouseTrackingActive;
+     private readonly logDirectory;
+     private focusOrderCounter;
+     private overlayStack;
+@@ -208,6 +210,8 @@
+     setAlternateScreen(enabled: boolean): void;
+     /** Enable basic SGR mouse events. Wheel events can then drive app-owned scrolling. */
+     setMouseTracking(enabled: boolean): void;
++    /** Temporarily switch mouse reporting between normal and button-motion modes. */
++    setMouseMotionTracking(enabled: boolean): void;
+     setFocus(component: Component | null): void;
+     private setFocusInternal;
+     private clearOverlayFocusRestore;

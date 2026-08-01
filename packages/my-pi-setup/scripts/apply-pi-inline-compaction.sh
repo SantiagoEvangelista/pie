@@ -13,6 +13,9 @@ agent_core="$root/node_modules/@earendil-works/pi-agent-core"
 tui="$root/node_modules/@earendil-works/pi-tui"
 conversion="${PI_CODEX_CONVERSION_PACKAGE:-$HOME/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion}"
 
+PI_CODEX_CONVERSION_PACKAGE="$conversion" \
+  "$patches/../scripts/repair-pi-codex-native.sh"
+
 if grep -q 'export class FixedBottomContainer' "$tui/dist/tui.js" &&
    grep -q 'setAlternateScreen(enabled)' "$tui/dist/tui.js"; then
   echo "Pi TUI pinned layout patch already applied"
@@ -21,12 +24,26 @@ else
   echo "Applied Pi TUI pinned layout patch"
 fi
 
+if grep -q 'setMouseMotionTracking(enabled)' "$tui/dist/tui.js"; then
+  echo "Pi TUI mouse ownership patch already applied"
+else
+  patch -d "$tui" -p1 < "$patches/pi-tui-0.83-mouse-ownership.patch"
+  echo "Applied Pi TUI mouse ownership patch"
+fi
+
 if grep -q 'setupPinnedLayoutScrolling' "$root/dist/modes/interactive/interactive-mode.js" &&
    grep -q 'PI_FIXED_LAYOUT_ACTIVE' "$root/dist/modes/interactive/interactive-mode.js"; then
   echo "Pi pinned layout patch already applied"
 else
   patch -d "$root" -p1 < "$patches/pi-0.83-pinned-layout.patch"
   echo "Applied Pi pinned layout patch"
+fi
+
+if grep -q 'pinnedLayoutInputUnsubscribe' "$root/dist/modes/interactive/interactive-mode.js"; then
+  echo "Pi pinned listener-order patch already applied"
+else
+  patch -d "$root" -p1 < "$patches/pi-0.83-pinned-listener-order.patch"
+  echo "Applied Pi pinned listener-order patch"
 fi
 
 if grep -q '_compactBetweenAgentTurns' "$agent_session"; then

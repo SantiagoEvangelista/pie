@@ -1,0 +1,44 @@
+--- a/dist/modes/interactive/interactive-mode.js
++++ b/dist/modes/interactive/interactive-mode.js
+@@ -176,6 +176,7 @@
+     scrollContainer;
+     bottomContainer;
+     pinnedLayout;
++    pinnedLayoutInputUnsubscribe;
+     loadedResourcesContainer;
+     chatContainer;
+     pendingMessagesContainer;
+@@ -566,7 +567,6 @@
+         this.ui.requestRender();
+         // Initialize extensions first so resources are shown before messages
+         await this.rebindCurrentSession();
+-        this.setupPinnedLayoutScrolling();
+         // Render initial messages AFTER showing loaded resources
+         this.renderInitialMessages();
+         // Set up theme file watcher
+@@ -1348,6 +1348,7 @@
+         }
+         await this.updateAvailableProviderCount();
+         this.updateEditorBorderColor();
++        this.setupPinnedLayoutScrolling();
+         this.updateTerminalTitle();
+     }
+     async handleFatalRuntimeError(prefix, error) {
+@@ -2030,7 +2031,8 @@
+     // Key Handlers
+     // =========================================================================
+     setupPinnedLayoutScrolling() {
+-        this.ui.addInputListener((data) => {
++        this.pinnedLayoutInputUnsubscribe?.();
++        this.pinnedLayoutInputUnsubscribe = this.ui.addInputListener((data) => {
+             if (this.ui.hasOverlay() || this.extensionSelector || this.extensionInput || this.extensionEditor) {
+                 return undefined;
+             }
+@@ -4558,6 +4560,7 @@
+             }
+             this.showError(`Reload failed: ${error instanceof Error ? error.message : String(error)}`);
+         }
++        this.setupPinnedLayoutScrolling();
+     }
+     async handleExportCommand(text) {
+         const outputPath = this.getPathCommandArgument(text, "/export");
