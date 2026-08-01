@@ -34,6 +34,10 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import {
+  OPEN_DASHBOARD_CHANNEL,
+  isDashboardAction,
+} from "../shared/dashboard-state.ts";
 import { defaultDelegatedReasoningEffort } from "../shared/intelligence-tiering.ts";
 import { toProviderThinkingLevel } from "../shared/thinking-level.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
@@ -270,6 +274,8 @@ export default function workflows(pi: ExtensionAPI) {
 
   /** Finished counts remain visible until the dashboard acknowledges them. */
   let lastUi: ExtensionContext["ui"] | undefined;
+  let sessionContext: ExtensionContext | undefined;
+  let dashboardOpen = false;
   let completedRuns = 0;
   let failedRuns = 0;
   const updateIndicator = () => {
@@ -300,11 +306,40 @@ export default function workflows(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    sessionContext = ctx;
     if (ctx.hasUI) lastUi = ctx.ui;
     updateIndicator();
   });
 
+  const openWorkflowDashboard = async (
+    ctx: ExtensionContext,
+    initialRunId?: string,
+  ) => {
+    if (ctx.mode !== "tui" || dashboardOpen) return;
+    dashboardOpen = true;
+    lastUi = ctx.ui;
+    try {
+      await showWorkflowDashboard(ctx, activeDetails, initialRunId);
+      // Opening the dashboard acknowledges finished runs.
+      completedRuns = 0;
+      failedRuns = 0;
+      updateIndicator();
+    } finally {
+      dashboardOpen = false;
+    }
+  };
+
+  const stopDashboardListener = pi.events.on(
+    OPEN_DASHBOARD_CHANNEL,
+    async (value) => {
+      if (!isDashboardAction(value) || value !== "workflows") return;
+      if (sessionContext) await openWorkflowDashboard(sessionContext);
+    },
+  );
+
   pi.on("session_shutdown", async () => {
+    sessionContext = undefined;
+    stopDashboardListener();
     const runs = [...activeRuns.values()];
     for (const run of runs) run.controller.abort("Session is shutting down");
     await Promise.all(
@@ -334,12 +369,7 @@ export default function workflows(pi: ExtensionAPI) {
     handler: async (rawArgs, ctx) => {
       const arg = rawArgs.trim();
       if (ctx.mode === "tui") {
-        lastUi = ctx.ui;
-        await showWorkflowDashboard(ctx, activeDetails, arg || undefined);
-        // Opening the dashboard acknowledges finished runs.
-        completedRuns = 0;
-        failedRuns = 0;
-        updateIndicator();
+        await openWorkflowDashboard(ctx, arg || undefined);
         return;
       }
       // Non-TUI fallback: plain text listing.

@@ -31,6 +31,29 @@ else
   echo "Applied Pi TUI mouse ownership patch"
 fi
 
+if grep -q 'autocompleteRequestScheduled' "$tui/dist/components/editor.js" &&
+   grep -q 'isAtVisualBottomBoundary()' "$tui/dist/components/editor.js"; then
+  echo "Pi TUI footer navigation editor runtime patch already applied"
+else
+  patch -d "$tui" -p1 < "$patches/pi-tui-0.83-footer-navigation-editor-js.patch"
+  echo "Applied Pi TUI footer navigation editor runtime patch"
+fi
+
+if grep -q 'autocompleteRequestScheduled' "$tui/dist/components/editor.d.ts" &&
+   grep -q 'isAtVisualBottomBoundary' "$tui/dist/components/editor.d.ts"; then
+  echo "Pi TUI footer navigation editor declaration patch already applied"
+else
+  patch -d "$tui" -p1 < "$patches/pi-tui-0.83-footer-navigation-editor-dts.patch"
+  echo "Applied Pi TUI footer navigation editor declaration patch"
+fi
+
+if grep -q 'isAtVisualBottomBoundary' "$tui/dist/editor-component.d.ts"; then
+  echo "Pi TUI footer navigation interface patch already applied"
+else
+  patch -d "$tui" -p1 < "$patches/pi-tui-0.83-footer-navigation-interface-dts.patch"
+  echo "Applied Pi TUI footer navigation interface patch"
+fi
+
 if grep -q 'setupPinnedLayoutScrolling' "$root/dist/modes/interactive/interactive-mode.js" &&
    grep -q 'PI_FIXED_LAYOUT_ACTIVE' "$root/dist/modes/interactive/interactive-mode.js"; then
   echo "Pi pinned layout patch already applied"
@@ -112,6 +135,7 @@ fi
 node --check "$agent_session"
 node --check "$tui/dist/tui.js"
 node --check "$tui/dist/index.js"
+node --check "$tui/dist/components/editor.js"
 node --check "$root/dist/modes/interactive/interactive-mode.js"
 node --check "$root/dist/core/session-manager.js"
 node --check "$root/dist/core/compaction/compaction.js"

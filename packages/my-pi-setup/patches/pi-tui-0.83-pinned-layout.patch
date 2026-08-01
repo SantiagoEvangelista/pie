@@ -251,3 +251,95 @@
 -//# sourceMappingURL=index.d.ts.map
 \ No newline at end of file
 +//# sourceMappingURL=index.d.ts.map
+--- a/dist/components/editor.js
++++ b/dist/components/editor.js
+@@ -219,6 +219,7 @@
+     autocompleteRequestTask = Promise.resolve();
+     autocompleteStartToken = 0;
+     autocompleteRequestId = 0;
++    autocompleteRequestScheduled = false;
+     // Paste tracking for large pastes
+     pastes = new Map();
+     pasteCounter = 0;
+@@ -1828,6 +1829,7 @@
+         }
+         this.cancelAutocompleteRequest();
+         const startToken = ++this.autocompleteStartToken;
++        this.autocompleteRequestScheduled = true;
+         const debounceMs = this.getAutocompleteDebounceMs(options);
+         if (debounceMs > 0) {
+             this.autocompleteDebounceTimer = setTimeout(() => {
+@@ -1845,6 +1847,7 @@
+             if (startToken !== this.autocompleteStartToken || !this.autocompleteProvider) {
+                 return;
+             }
++            this.autocompleteRequestScheduled = false;
+             const controller = new AbortController();
+             this.autocompleteAbort = controller;
+             const requestId = ++this.autocompleteRequestId;
+@@ -1922,6 +1925,7 @@
+     }
+     cancelAutocompleteRequest() {
+         this.autocompleteStartToken += 1;
++        this.autocompleteRequestScheduled = false;
+         if (this.autocompleteDebounceTimer) {
+             clearTimeout(this.autocompleteDebounceTimer);
+             this.autocompleteDebounceTimer = undefined;
+@@ -1937,6 +1941,16 @@
+     cancelAutocomplete() {
+         this.cancelAutocompleteRequest();
+         this.clearAutocompleteUi();
++    }
++    /** Whether Down has no remaining editor, history, or autocomplete navigation. */
++    isAtVisualBottomBoundary() {
++        const currentLine = this.state.lines[this.state.cursorLine] || "";
++        return (this.autocompleteState === null &&
++            !this.autocompleteRequestScheduled &&
++            this.autocompleteAbort === undefined &&
++            this.historyIndex === -1 &&
++            this.isOnLastVisualLine() &&
++            this.state.cursorCol === currentLine.length);
+     }
+     isShowingAutocomplete() {
+         return this.autocompleteState !== null;
+@@ -1947,4 +1961,4 @@
+         this.requestAutocomplete({ force: this.autocompleteState === "force", explicitTab: false });
+     }
+ }
+-//# sourceMappingURL=editor.js.map
+\ No newline at end of file
++//# sourceMappingURL=editor.js.map
+--- a/dist/components/editor.d.ts
++++ b/dist/components/editor.d.ts
+@@ -53,6 +53,7 @@
+     private autocompleteRequestTask;
+     private autocompleteStartToken;
+     private autocompleteRequestId;
++    private autocompleteRequestScheduled;
+     private pastes;
+     private pasteCounter;
+     private pasteBuffer;
+@@ -249,7 +250,9 @@
+     private cancelAutocompleteRequest;
+     private clearAutocompleteUi;
+     private cancelAutocomplete;
++    /** Whether Down has no remaining editor, history, or autocomplete navigation. */
++    isAtVisualBottomBoundary(): boolean;
+     isShowingAutocomplete(): boolean;
+     private updateAutocomplete;
+ }
+-//# sourceMappingURL=editor.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=editor.d.ts.map
+--- a/dist/editor-component.d.ts
++++ b/dist/editor-component.d.ts
+@@ -35,5 +35,7 @@
+     setPaddingX?(padding: number): void;
+     /** Set max visible items in autocomplete dropdown */
+     setAutocompleteMaxVisible?(maxVisible: number): void;
++    /** Whether Down has no remaining editor, history, or autocomplete navigation. */
++    isAtVisualBottomBoundary?(): boolean;
+ }
+-//# sourceMappingURL=editor-component.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=editor-component.d.ts.map

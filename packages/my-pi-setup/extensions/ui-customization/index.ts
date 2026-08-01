@@ -1,25 +1,38 @@
 import { homedir } from "node:os";
 import { relative } from "node:path";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ReadonlyFooterDataProvider,
+import {
+  CustomEditor,
+  type EditorFactory,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type KeybindingsManager,
+  type ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import {
   getCapabilities,
   hyperlink,
   truncateToWidth,
   visibleWidth,
+  type Component,
+  type EditorComponent,
+  type Focusable,
+  type TUI,
 } from "@earendil-works/pi-tui";
 import {
   emptyGitInfoState,
   emptyModelInfoState,
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
+  OPEN_DASHBOARD_CHANNEL,
   REFRESH_CHANNEL,
   isGitInfoState,
   isModelInfoState,
 } from "../shared/dashboard-state.ts";
+import {
+  FooterActionSelection,
+  type FooterAction,
+  type FooterNavigationIntent,
+} from "./footer-navigation.ts";
 
 type Rgb = [number, number, number];
 interface RenderableNode {
@@ -30,6 +43,104 @@ interface RenderableNode {
 
 interface DashboardTui extends RenderableNode {
   requestRender(force?: boolean): void;
+}
+
+interface BoundaryAwareEditor extends EditorComponent {
+  isAtVisualBottomBoundary?(): boolean;
+}
+
+type DashboardTheme = ExtensionContext["ui"]["theme"];
+
+class DashboardFooter implements Component, Focusable {
+  private readonly selection = new FooterActionSelection();
+  private editor?: EditorComponent;
+  private keybindings?: KeybindingsManager;
+  private isFocused = false;
+
+  constructor(
+    private readonly tui: TUI,
+    private readonly theme: DashboardTheme,
+    private readonly renderContent: (width: number) => string[],
+    private readonly openDashboard: (action: FooterAction) => void,
+  ) {}
+
+  get focused(): boolean {
+    return this.isFocused;
+  }
+
+  set focused(value: boolean) {
+    this.isFocused = value;
+  }
+
+  bindEditor(editor: EditorComponent, keybindings: KeybindingsManager): void {
+    this.editor = editor;
+    this.keybindings = keybindings;
+  }
+
+  focusFromEditor(): void {
+    this.tui.setFocus(this);
+    this.tui.requestRender();
+  }
+
+  private focusEditor(): void {
+    if (!this.editor) return;
+    this.tui.setFocus(this.editor);
+    this.tui.requestRender();
+  }
+
+  handleInput(data: string): void {
+    const keybindings = this.keybindings;
+    if (!keybindings) return;
+
+    let intent: FooterNavigationIntent | undefined;
+    if (keybindings.matches(data, "tui.editor.cursorLeft")) {
+      intent = "left";
+    } else if (keybindings.matches(data, "tui.editor.cursorRight")) {
+      intent = "right";
+    } else if (keybindings.matches(data, "tui.editor.cursorUp")) {
+      intent = "up";
+    } else if (keybindings.matches(data, "tui.select.cancel")) {
+      intent = "cancel";
+    } else if (keybindings.matches(data, "tui.select.confirm")) {
+      intent = "confirm";
+    }
+
+    if (!intent) return;
+    const result = this.selection.handle(intent);
+    if (result.returnToEditor) this.focusEditor();
+    if (result.action) this.openDashboard(result.action);
+    if (result.returnToEditor) return;
+    this.tui.requestRender();
+  }
+
+  private actionLabel(action: FooterAction): string {
+    const text = action === "workflows" ? "Workflows" : "Subagents";
+    if (!this.focused || this.selection.current() !== action) {
+      return this.theme.fg("accent", text);
+    }
+    return this.theme.bg(
+      "selectedBg",
+      this.theme.bold(this.theme.fg("text", ` ${text} `)),
+    );
+  }
+
+  private renderActions(width: number): string {
+    const marker = this.focused
+      ? this.theme.fg("accent", "❯ ")
+      : this.theme.fg("dim", "↓ ");
+    const separator = this.theme.fg("dim", "  ·  ");
+    const all = `${marker}${this.actionLabel("workflows")}${separator}${this.actionLabel("subagents")}`;
+    if (visibleWidth(all) <= width) return all;
+
+    const selected = `${marker}${this.actionLabel(this.selection.current())}`;
+    return truncateToWidth(selected, width, "");
+  }
+
+  render(width: number): string[] {
+    return [...this.renderContent(width), this.renderActions(width)];
+  }
+
+  invalidate(): void {}
 }
 
 const RESET = "\x1b[0m";
@@ -190,6 +301,8 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let gitInfo = emptyGitInfoState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
+  let activeFooter: DashboardFooter | undefined;
+  let previousEditorFactory: EditorFactory | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
 
   const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
@@ -243,9 +356,10 @@ export default function uiCustomization(pi: ExtensionAPI) {
     ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
       requestRender = () => tui.requestRender();
 
-      return {
-        invalidate() {},
-        render(width: number) {
+      activeFooter = new DashboardFooter(
+        tui,
+        theme,
+        (width) => {
           const directory = theme.fg("text", formatDirectory(ctx.cwd));
           const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
           let git = gitInfo.branch
@@ -295,7 +409,29 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
           return lines;
         },
+        (action) => pi.events.emit(OPEN_DASHBOARD_CHANNEL, action),
+      );
+      return activeFooter;
+    });
+
+    previousEditorFactory = ctx.ui.getEditorComponent();
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+      const editor = (previousEditorFactory?.(tui, theme, keybindings) ??
+        new CustomEditor(tui, theme, keybindings)) as BoundaryAwareEditor;
+      const handleInput = editor.handleInput.bind(editor);
+
+      editor.handleInput = (data: string) => {
+        if (
+          keybindings.matches(data, "tui.editor.cursorDown") &&
+          editor.isAtVisualBottomBoundary?.() === true
+        ) {
+          activeFooter?.focusFromEditor();
+          return;
+        }
+        handleInput(data);
       };
+      activeFooter?.bindEditor(editor, keybindings);
+      return editor;
     });
 
     ctx.ui.setTitle(`pi · ${title}`);
@@ -321,8 +457,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
     activeTui = undefined;
     requestRender = undefined;
     if (ctx.mode === "tui") {
+      ctx.ui.setEditorComponent(previousEditorFactory);
       ctx.ui.setHeader(undefined);
       ctx.ui.setFooter(undefined);
     }
+    activeFooter = undefined;
+    previousEditorFactory = undefined;
   });
 }

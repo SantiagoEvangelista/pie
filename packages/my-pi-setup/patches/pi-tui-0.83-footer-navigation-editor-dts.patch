@@ -1,0 +1,22 @@
+--- a/dist/components/editor.d.ts
++++ b/dist/components/editor.d.ts
+@@ -53,6 +53,7 @@
+     private autocompleteRequestTask;
+     private autocompleteStartToken;
+     private autocompleteRequestId;
++    private autocompleteRequestScheduled;
+     private pastes;
+     private pasteCounter;
+     private pasteBuffer;
+@@ -249,7 +250,9 @@
+     private cancelAutocompleteRequest;
+     private clearAutocompleteUi;
+     private cancelAutocomplete;
++    /** Whether Down has no remaining editor, history, or autocomplete navigation. */
++    isAtVisualBottomBoundary(): boolean;
+     isShowingAutocomplete(): boolean;
+     private updateAutocomplete;
+ }
+-//# sourceMappingURL=editor.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=editor.d.ts.map

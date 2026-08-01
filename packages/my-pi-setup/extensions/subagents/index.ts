@@ -37,6 +37,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  OPEN_DASHBOARD_CHANNEL,
+  isDashboardAction,
+} from "../shared/dashboard-state.ts";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
   formatElapsed,
@@ -140,6 +144,7 @@ export default function (pi: ExtensionAPI) {
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
+  let dashboardOpen = false;
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
 
@@ -241,10 +246,30 @@ export default function (pi: ExtensionAPI) {
     if (ctx.hasUI) ui = ctx.ui;
   });
 
+  const openSubagentDashboard = async (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui" || dashboardOpen) return;
+    dashboardOpen = true;
+    try {
+      const manager = await getManager();
+      await openSubagentPicker(ctx, manager.view);
+    } finally {
+      dashboardOpen = false;
+    }
+  };
+
+  const stopDashboardListener = pi.events.on(
+    OPEN_DASHBOARD_CHANNEL,
+    async (value) => {
+      if (!isDashboardAction(value) || value !== "subagents") return;
+      if (sessionContext) await openSubagentDashboard(sessionContext);
+    },
+  );
+
   pi.on("agent_settled", flushResults);
 
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
+    stopDashboardListener();
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
@@ -724,15 +749,7 @@ export default function (pi: ExtensionAPI) {
           );
         return;
       }
-      const manager = await getManager();
-      if (manager.view.size() === 0) {
-        ctx.ui.notify(
-          "No subagents yet. The agent spawns them with subagent_spawn.",
-          "info",
-        );
-        return;
-      }
-      await openSubagentPicker(ctx, manager.view);
+      await openSubagentDashboard(ctx);
     },
   });
 }

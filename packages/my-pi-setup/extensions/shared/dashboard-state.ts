@@ -1,6 +1,13 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const GIT_INFO_CHANNEL = "dashboard:git-info";
 export const REFRESH_CHANNEL = "dashboard:refresh";
+export const OPEN_DASHBOARD_CHANNEL = "dashboard:open";
+
+export type DashboardAction = "workflows" | "subagents";
+
+export function isDashboardAction(value: unknown): value is DashboardAction {
+  return value === "workflows" || value === "subagents";
+}
 
 export interface ModelInfoState {
   provider: string;

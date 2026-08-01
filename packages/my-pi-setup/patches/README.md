@@ -15,6 +15,13 @@ scrollback while Pi runs and restores it on exit or suspend.
 install in place; clean installs receive the same change from the consolidated
 pinned-layout patch.
 
+`pi-tui-0.83-footer-navigation-{editor-js,editor-dts,interface-dts}.patch`
+expose the editor's safe lower-boundary state so custom editor wrappers can
+transfer Down focus without intercepting multiline movement, history browsing,
+or active/pending autocomplete. Per-artifact upgrade patches let partial installs
+self-repair; clean installs receive them from the consolidated pinned-layout
+patch.
+
 `pi-0.83-pinned-listener-order.patch` upgrades an existing pinned-layout
 install so its wheel listener is re-registered after every extension bind.
 This preserves Option-A cancellation after reload/rebind; clean installs receive

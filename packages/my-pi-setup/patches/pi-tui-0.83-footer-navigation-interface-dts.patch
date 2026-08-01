@@ -1,0 +1,12 @@
+--- a/dist/editor-component.d.ts
++++ b/dist/editor-component.d.ts
+@@ -35,5 +35,7 @@
+     setPaddingX?(padding: number): void;
+     /** Set max visible items in autocomplete dropdown */
+     setAutocompleteMaxVisible?(maxVisible: number): void;
++    /** Whether Down has no remaining editor, history, or autocomplete navigation. */
++    isAtVisualBottomBoundary?(): boolean;
+ }
+-//# sourceMappingURL=editor-component.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=editor-component.d.ts.map

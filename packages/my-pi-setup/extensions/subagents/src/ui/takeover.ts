@@ -7,7 +7,7 @@
  */
 
 import type {
-  ExtensionCommandContext,
+  ExtensionContext,
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -23,6 +23,14 @@ function configuredKeys(
   binding: Parameters<KeybindingsManager["getKeys"]>[0],
 ) {
   return keybindings.getKeys(binding).join("/") || "unbound";
+}
+
+export function fitSubagentDashboardLines(
+  lines: readonly string[],
+  width: number,
+): string[] {
+  const safeWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+  return lines.map((line) => truncateToWidth(line, safeWidth, ""));
 }
 
 function statusGlyph(snap: SubagentSnapshot, theme: Theme): string {
@@ -54,7 +62,7 @@ export interface TakeoverOptions {
 }
 
 export async function openSubagentTakeover(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   view: SubagentReadModel,
   id: string,
   options?: TakeoverOptions,
@@ -71,17 +79,12 @@ export async function openSubagentTakeover(
 }
 
 export async function openSubagentPicker(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   view: SubagentReadModel,
 ) {
   const selection: DashboardSelection = { index: 0 };
 
   while (true) {
-    if (view.size() === 0) {
-      ctx.ui.notify("No subagents", "info");
-      return;
-    }
-
     const picked = await ctx.ui.custom<string | null>(
       (tui, theme, keybindings, done) =>
         new SubagentDashboard(tui, theme, keybindings, view, selection, done),
@@ -236,7 +239,10 @@ class SubagentDashboard implements Component {
     // chat, editor, and extra footer lines while leaving pi's final footer
     // row visible.
     const bodyHeight = Math.max(6, rows - 5);
-    const innerWidth = width - 2;
+    const renderWidth = Number.isFinite(width)
+      ? Math.max(0, Math.floor(width))
+      : 0;
+    const innerWidth = Math.max(0, renderWidth - 2);
 
     const lines: string[] = [];
 
@@ -248,12 +254,12 @@ class SubagentDashboard implements Component {
     );
     const headerPad = Math.max(
       1,
-      width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
+      renderWidth - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
     );
     lines.push(
       truncateToWidth(
         `  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `,
-        width,
+        renderWidth,
       ),
     );
 
@@ -286,11 +292,11 @@ class SubagentDashboard implements Component {
           "dim",
           `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} take over · x abort · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
         ),
-        width,
+        renderWidth,
       ),
     );
 
-    return lines;
+    return fitSubagentDashboardLines(lines, renderWidth);
   }
 
   private renderRows(
