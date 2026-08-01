@@ -1,1 +1,0 @@
-/Users/missedme/Desktop/codexCustomSystemPrompt/pi-fable-AGENTS.md
