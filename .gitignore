@@ -1,0 +1,31 @@
+# Credentials and local environment
+auth.json
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Private conversation and runtime state
+sessions/
+workflows/
+compact-backups/
+backups/
+.cache/
+cache/
+pi-crash.log
+*.log
+
+# Generated catalogs, downloads, and caches
+models-store.json
+bin/
+git/
+**/node_modules/
+.DS_Store
+
+# Local backups and temporary files
+*.backup
+*.bak
+*.tmp
+*.swp

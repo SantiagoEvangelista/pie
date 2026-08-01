@@ -1,0 +1,8 @@
+{
+  "name": "compact-tool-summary",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --experimental-strip-types summary.test.ts"
+  }
+}

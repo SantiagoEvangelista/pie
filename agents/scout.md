@@ -1,0 +1,1 @@
+/Users/missedme/.nvm/versions/node/v22.22.0/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/agents/scout.md

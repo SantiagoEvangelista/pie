@@ -1,0 +1,5 @@
+{
+  "name": "claude-system-prompt-extension",
+  "private": true,
+  "type": "module"
+}

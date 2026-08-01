@@ -1,0 +1,49 @@
+--- a/src/extension/runtime.ts
++++ b/src/extension/runtime.ts
+@@ -47,7 +47,8 @@
+ }
+ 
+ function prewarmReasoningOption(level: ReturnType<ExtensionAPI["getThinkingLevel"]>): Pick<OpenAICodexStreamOptions, "reasoning"> | Record<never, never> {
+-	return level === "off" ? {} : { reasoning: level };
++	if (level === "off") return {};
++	return { reasoning: level === "ultracode" ? "xhigh" : level };
+ }
+ 
+ export function createCodexExtensionRuntime(pi: ExtensionAPI): CodexExtensionRuntime {
+--- a/dist/extension/runtime.js
++++ b/dist/extension/runtime.js
+@@ -21,7 +21,9 @@
+     return getActiveToolsInActiveOrder(pi, true);
+ }
+ function prewarmReasoningOption(level) {
+-    return level === "off" ? {} : { reasoning: level };
++    if (level === "off")
++        return {};
++    return { reasoning: level === "ultracode" ? "xhigh" : level };
+ }
+ export function createCodexExtensionRuntime(pi) {
+     const state = {
+--- a/src/adapter/compaction/compaction.ts
++++ b/src/adapter/compaction/compaction.ts
+@@ -65,7 +65,8 @@
+ 	state: AdapterState,
+ 	compactionTargetModel: Model<Api>,
+ ): NativeCompactionRequestOptions["reasoning"] {
+-	const level = pi.getThinkingLevel();
++	const selectedLevel = pi.getThinkingLevel();
++	const level = selectedLevel === "ultracode" ? "xhigh" : selectedLevel;
+ 	if (!compactionTargetModel.reasoning || level === "off") return undefined;
+ 	const clampedLevel = clampThinkingLevel(compactionTargetModel, level as ModelThinkingLevel);
+ 	const rawEffort = compactionTargetModel.thinkingLevelMap?.[clampedLevel] ?? clampedLevel;
+--- a/dist/adapter/compaction/compaction.js
++++ b/dist/adapter/compaction/compaction.js
+@@ -46,7 +46,8 @@
+     return convertResponsesTools(tools, { strict: null });
+ }
+ function buildCompactionReasoning(pi, ctx, state, compactionTargetModel) {
+-    const level = pi.getThinkingLevel();
++    const selectedLevel = pi.getThinkingLevel();
++    const level = selectedLevel === "ultracode" ? "xhigh" : selectedLevel;
+     if (!compactionTargetModel.reasoning || level === "off")
+         return undefined;
+     const clampedLevel = clampThinkingLevel(compactionTargetModel, level);

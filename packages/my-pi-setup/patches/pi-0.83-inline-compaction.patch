@@ -1,0 +1,65 @@
+--- a/dist/core/agent-session.js
++++ b/dist/core/agent-session.js
+@@ -266,10 +266,11 @@
+         this.agent.prepareNextTurnWithContext = async (turn, signal) => {
+             const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
+             const previousContext = previousSnapshot?.context ?? turn.context;
++            const nextContext = await this._compactBetweenAgentTurns(previousContext, signal);
+             return {
+                 ...previousSnapshot,
+                 context: {
+-                    ...previousContext,
++                    ...nextContext,
+                     systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+                     tools: this.agent.state.tools.slice(),
+                 },
+@@ -278,6 +279,42 @@
+             };
+         };
+     }
++    /**
++     * Compact inside the active agent loop, after a tool batch and before the
++     * next model request. This mirrors Codex inline auto-compaction: history is
++     * replaced in place and the same turn continues without aborting or adding
++     * a synthetic user continuation message.
++     */
++    async _compactBetweenAgentTurns(context, signal) {
++        const settings = this.settingsManager.getCompactionSettings();
++        const contextWindow = this.model?.contextWindow ?? 0;
++        const usage = this.getContextUsage();
++        if (signal.aborted ||
++            !settings.enabled ||
++            contextWindow <= 0 ||
++            usage?.tokens === null ||
++            usage?.tokens === undefined ||
++            !shouldCompact(usage.tokens, contextWindow, settings)) {
++            return context;
++        }
++        const beforeCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
++        const abortCompaction = () => this.abortCompaction();
++        signal.addEventListener("abort", abortCompaction, { once: true });
++        try {
++            await this._runAutoCompaction("threshold", false);
++        }
++        finally {
++            signal.removeEventListener("abort", abortCompaction);
++        }
++        const afterCompactionId = getLatestCompactionEntry(this.sessionManager.getBranch())?.id;
++        if (!afterCompactionId || afterCompactionId === beforeCompactionId) {
++            return context;
++        }
++        return {
++            ...context,
++            messages: this.agent.state.messages,
++        };
++    }
+     // =========================================================================
+     // Event Subscription
+     // =========================================================================
+@@ -2682,4 +2719,4 @@
+         return this._extensionRunner;
+     }
+ }
+-//# sourceMappingURL=agent-session.js.map
+\ No newline at end of file
++//# sourceMappingURL=agent-session.js.map

@@ -1,0 +1,555 @@
+--- a/dist/core/agent-session.js
++++ b/dist/core/agent-session.js
+@@ -68,6 +68,16 @@
+     }
+     return tokens;
+ }
++function deepFreeze(value) {
++    if (!value || typeof value !== "object" || Object.isFrozen(value)) {
++        return value;
++    }
++    Object.freeze(value);
++    for (const nested of Object.values(value)) {
++        deepFreeze(nested);
++    }
++    return value;
++}
+ // ============================================================================
+ // Constants
+ // ============================================================================
+@@ -97,6 +107,7 @@
+     // Compaction state
+     _compactionAbortController = undefined;
+     _autoCompactionAbortController = undefined;
++    _compactionInProgress = false;
+     _overflowRecoveryAttempted = false;
+     // Branch summarization state
+     _branchSummaryAbortController = undefined;
+@@ -266,18 +277,21 @@
+                 ? async (_turn, signal) => await this.agent.prepareNextTurn?.(signal)
+                 : undefined);
+         this.agent.prepareNextTurnWithContext = async (turn, signal) => {
+-            const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
+-            const previousContext = previousSnapshot?.context ?? turn.context;
+-            const nextContext = await this._compactBetweenAgentTurns(previousContext, signal);
++            const compactedContext = await this._compactBetweenAgentTurns(turn.context, signal);
++            const previousSnapshot = await previousPrepareNextTurnWithContext?.({
++                ...turn,
++                context: compactedContext,
++            }, signal);
++            const nextContext = previousSnapshot?.context ?? compactedContext;
+             return {
+                 ...previousSnapshot,
+                 context: {
+                     ...nextContext,
+-                    systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+-                    tools: this.agent.state.tools.slice(),
++                    systemPrompt: nextContext.systemPrompt ?? this._systemPromptOverride ?? this._baseSystemPrompt,
++                    tools: nextContext.tools ?? this.agent.state.tools.slice(),
+                 },
+-                model: this.agent.state.model,
+-                thinkingLevel: this.agent.state.thinkingLevel,
++                model: previousSnapshot?.model ?? this.agent.state.model,
++                thinkingLevel: previousSnapshot?.thinkingLevel ?? this.agent.state.thinkingLevel,
+             };
+         };
+     }
+@@ -1408,24 +1422,109 @@
+     // =========================================================================
+     // Compaction
+     // =========================================================================
++    _beginCompaction(kind) {
++        if (this._compactionInProgress) {
++            return undefined;
++        }
++        const controller = new AbortController();
++        this._compactionInProgress = true;
++        if (kind === "manual") {
++            this._compactionAbortController = controller;
++        }
++        else {
++            this._autoCompactionAbortController = controller;
++        }
++        return controller;
++    }
++    _finishCompaction(kind, controller) {
++        let ownsCompaction = false;
++        if (kind === "manual" && this._compactionAbortController === controller) {
++            this._compactionAbortController = undefined;
++            ownsCompaction = true;
++        }
++        if (kind === "auto" && this._autoCompactionAbortController === controller) {
++            this._autoCompactionAbortController = undefined;
++            ownsCompaction = true;
++        }
++        if (ownsCompaction) {
++            this._compactionInProgress = false;
++        }
++    }
++    _captureCompactionSnapshot(branchEntries, model, thinkingLevel) {
++        return {
++            sessionId: this.sessionManager.getSessionId(),
++            leafId: this.sessionManager.getLeafId(),
++            branchIds: branchEntries.map((entry) => entry.id),
++            branchDigest: JSON.stringify(branchEntries),
++            modelIdentity: model
++                ? [model.provider, model.id, model.api, model.baseUrl ?? ""].join("\0")
++                : undefined,
++            thinkingLevel,
++        };
++    }
++    _assertCompactionSnapshotCurrent(snapshot, firstKeptEntryId, signal) {
++        if (signal.aborted) {
++            throw new DOMException("Compaction cancelled", "AbortError");
++        }
++        const currentBranchIds = this.sessionManager.getBranch().map((entry) => entry.id);
++        const branchIsCurrent = snapshot.sessionId === this.sessionManager.getSessionId() &&
++            snapshot.leafId === this.sessionManager.getLeafId() &&
++            snapshot.branchIds.length === currentBranchIds.length &&
++            snapshot.branchIds.every((id, index) => id === currentBranchIds[index]) &&
++            snapshot.branchDigest === JSON.stringify(this.sessionManager.getBranch());
++        if (!branchIsCurrent) {
++            throw new Error("Compaction context changed while the compaction request was running");
++        }
++        const currentModel = this.model;
++        const currentModelIdentity = currentModel
++            ? [currentModel.provider, currentModel.id, currentModel.api, currentModel.baseUrl ?? ""].join("\0")
++            : undefined;
++        if (snapshot.modelIdentity !== currentModelIdentity || snapshot.thinkingLevel !== this.thinkingLevel) {
++            throw new Error("Compaction model or thinking level changed while the compaction request was running");
++        }
++        if (!snapshot.branchIds.includes(firstKeptEntryId)) {
++            throw new Error(`Compaction returned an invalid kept-entry boundary: ${firstKeptEntryId}`);
++        }
++    }
++    _commitCompaction(snapshot, result, fromExtension, signal) {
++        this._assertCompactionSnapshotCurrent(snapshot, result.firstKeptEntryId, signal);
++        const entryId = this.sessionManager.appendCompaction(result.summary, result.firstKeptEntryId, result.tokensBefore, result.details, fromExtension, result.usage);
++        const compactionEntry = this.sessionManager.getEntry(entryId);
++        if (!compactionEntry || compactionEntry.type !== "compaction") {
++            throw new Error("Compaction checkpoint was not persisted");
++        }
++        const context = this.sessionManager.buildSessionContext();
++        this.agent.state.messages = context.messages;
++        return {
++            compactionEntry,
++            context,
++            estimatedTokensAfter: estimateMessagesTokens(context.messages),
++        };
++    }
+     /**
+      * Manually compact the session context.
+      * Aborts current agent operation first.
+      * @param customInstructions Optional instructions for the compaction summary
+      */
+     async compact(customInstructions) {
+-        this._disconnectFromAgent();
+-        await this.abort();
+-        this._compactionAbortController = new AbortController();
+-        this._emit({ type: "compaction_start", reason: "manual" });
++        const controller = this._beginCompaction("manual");
++        if (!controller) {
++            throw new Error("Compaction already in progress");
++        }
++        this._disconnectFromAgent();
+         try {
+-            if (!this.model) {
++            await this.abort();
++            this._emit({ type: "compaction_start", reason: "manual" });
++            const model = this.model;
++            if (!model) {
+                 throw new Error(formatNoModelSelectedMessage());
+             }
+-            const { apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
+-            const pathEntries = this.sessionManager.getBranch();
++            const thinkingLevel = this.thinkingLevel;
++            const pathEntries = deepFreeze(structuredClone(this.sessionManager.getBranch()));
++            const snapshot = this._captureCompactionSnapshot(pathEntries, model, thinkingLevel);
+             const settings = this.settingsManager.getCompactionSettings();
+-            const preparation = prepareCompaction(pathEntries, settings);
++            const preparationResult = prepareCompaction(pathEntries, settings);
++            const preparation = preparationResult ? deepFreeze(preparationResult) : undefined;
+             if (!preparation) {
+                 // Check why we can't compact
+                 const lastEntry = pathEntries[pathEntries.length - 1];
+@@ -1434,6 +1533,8 @@
+                 }
+                 throw new Error("Nothing to compact (session too small)");
+             }
++            const { apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
++            this._assertCompactionSnapshotCurrent(snapshot, preparation.firstKeptEntryId, controller.signal);
+             let extensionCompaction;
+             let fromExtension = false;
+             if (this._extensionRunner.hasHandlers("session_before_compact")) {
+@@ -1444,8 +1545,9 @@
+                     customInstructions,
+                     reason: "manual",
+                     willRetry: false,
+-                    signal: this._compactionAbortController.signal,
++                    signal: controller.signal,
+                 }));
++                this._assertCompactionSnapshotCurrent(snapshot, preparation.firstKeptEntryId, controller.signal);
+                 if (result?.cancel) {
+                     throw new Error("Compaction cancelled");
+                 }
+@@ -1469,27 +1571,21 @@
+             }
+             else {
+                 // Generate compaction result
+-                const result = await compact(preparation, this.model, apiKey, headers, customInstructions, this._compactionAbortController.signal, toProviderThinkingLevel(this.thinkingLevel), this.agent.streamFunction, env, this.settingsManager.getRetrySettings(), this._summarizationRetryCallbacks({ source: "compaction", reason: "manual" }));
++                const result = await compact(preparation, model, apiKey, headers, customInstructions, controller.signal, toProviderThinkingLevel(thinkingLevel), this.agent.streamFunction, env, this.settingsManager.getRetrySettings(), this._summarizationRetryCallbacks({ source: "compaction", reason: "manual" }));
+                 summary = result.summary;
+                 firstKeptEntryId = result.firstKeptEntryId;
+                 tokensBefore = result.tokensBefore;
+                 usage = result.usage;
+                 details = result.details;
+             }
+-            if (this._compactionAbortController.signal.aborted) {
++            if (controller.signal.aborted) {
+                 throw new Error("Compaction cancelled");
+             }
+-            this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+-            const newEntries = this.sessionManager.getEntries();
+-            const sessionContext = this.sessionManager.buildSessionContext();
+-            this.agent.state.messages = sessionContext.messages;
+-            const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+-            // Get the saved compaction entry for the extension event
+-            const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary);
+-            if (this._extensionRunner && savedCompactionEntry) {
++            const committed = this._commitCompaction(snapshot, { summary, firstKeptEntryId, tokensBefore, usage, details }, fromExtension, controller.signal);
++            if (this._extensionRunner) {
+                 await this._extensionRunner.emit({
+                     type: "session_compact",
+-                    compactionEntry: savedCompactionEntry,
++                    compactionEntry: deepFreeze(structuredClone(committed.compactionEntry)),
+                     fromExtension,
+                     reason: "manual",
+                     willRetry: false,
+@@ -1499,7 +1595,7 @@
+                 summary,
+                 firstKeptEntryId,
+                 tokensBefore,
+-                estimatedTokensAfter,
++                estimatedTokensAfter: committed.estimatedTokensAfter,
+                 usage,
+                 details,
+             };
+@@ -1514,7 +1610,7 @@
+         }
+         catch (error) {
+             const message = error instanceof Error ? error.message : String(error);
+-            const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
++            const aborted = controller.signal.aborted || message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
+             this._emit({
+                 type: "compaction_end",
+                 reason: "manual",
+@@ -1526,7 +1622,7 @@
+             throw error;
+         }
+         finally {
+-            this._compactionAbortController = undefined;
++            this._finishCompaction("manual", controller);
+             this._reconnectToAgent();
+         }
+     }
+@@ -1638,29 +1734,37 @@
+      * Internal: Run auto-compaction with events.
+      */
+     async _runAutoCompaction(reason, willRetry) {
++        const controller = this._beginCompaction("auto");
++        if (!controller) {
++            return false;
++        }
+         const settings = this.settingsManager.getCompactionSettings();
+         let started = false;
+         try {
+-            if (!this.model) {
++            const model = this.model;
++            if (!model) {
+                 return false;
+             }
+-            let apiKey;
+-            let headers;
+-            let env;
+-            if (this.agent.streamFunction === streamSimple) {
+-                ({ apiKey, headers, env } = await this._getRequiredRequestAuth(this.model));
+-            }
+-            else {
+-                ({ apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model));
+-            }
+-            const pathEntries = this.sessionManager.getBranch();
+-            const preparation = prepareCompaction(pathEntries, settings);
++            const thinkingLevel = this.thinkingLevel;
++            const pathEntries = deepFreeze(structuredClone(this.sessionManager.getBranch()));
++            const snapshot = this._captureCompactionSnapshot(pathEntries, model, thinkingLevel);
++            const preparationResult = prepareCompaction(pathEntries, settings);
++            const preparation = preparationResult ? deepFreeze(preparationResult) : undefined;
+             if (!preparation) {
+                 return false;
+             }
+             this._emit({ type: "compaction_start", reason });
+-            this._autoCompactionAbortController = new AbortController();
+             started = true;
++            let apiKey;
++            let headers;
++            let env;
++            if (this.agent.streamFunction === streamSimple) {
++                ({ apiKey, headers, env } = await this._getRequiredRequestAuth(model));
++            }
++            else {
++                ({ apiKey, headers, env } = await this._getSummarizationRequestAuth(model));
++            }
++            this._assertCompactionSnapshotCurrent(snapshot, preparation.firstKeptEntryId, controller.signal);
+             let extensionCompaction;
+             let fromExtension = false;
+             if (this._extensionRunner.hasHandlers("session_before_compact")) {
+@@ -1671,8 +1775,9 @@
+                     customInstructions: undefined,
+                     reason,
+                     willRetry,
+-                    signal: this._autoCompactionAbortController.signal,
++                    signal: controller.signal,
+                 }));
++                this._assertCompactionSnapshotCurrent(snapshot, preparation.firstKeptEntryId, controller.signal);
+                 if (extensionResult?.cancel) {
+                     this._emit({
+                         type: "compaction_end",
+@@ -1703,14 +1808,14 @@
+             }
+             else {
+                 // Generate compaction result
+-                const compactResult = await compact(preparation, this.model, apiKey, headers, undefined, this._autoCompactionAbortController.signal, toProviderThinkingLevel(this.thinkingLevel), this.agent.streamFunction, env, this.settingsManager.getRetrySettings(), this._summarizationRetryCallbacks({ source: "compaction", reason }));
++                const compactResult = await compact(preparation, model, apiKey, headers, undefined, controller.signal, toProviderThinkingLevel(thinkingLevel), this.agent.streamFunction, env, this.settingsManager.getRetrySettings(), this._summarizationRetryCallbacks({ source: "compaction", reason }));
+                 summary = compactResult.summary;
+                 firstKeptEntryId = compactResult.firstKeptEntryId;
+                 tokensBefore = compactResult.tokensBefore;
+                 usage = compactResult.usage;
+                 details = compactResult.details;
+             }
+-            if (this._autoCompactionAbortController.signal.aborted) {
++            if (controller.signal.aborted) {
+                 this._emit({
+                     type: "compaction_end",
+                     reason,
+@@ -1720,17 +1825,11 @@
+                 });
+                 return false;
+             }
+-            this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+-            const newEntries = this.sessionManager.getEntries();
+-            const sessionContext = this.sessionManager.buildSessionContext();
+-            this.agent.state.messages = sessionContext.messages;
+-            const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+-            // Get the saved compaction entry for the extension event
+-            const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary);
+-            if (this._extensionRunner && savedCompactionEntry) {
++            const committed = this._commitCompaction(snapshot, { summary, firstKeptEntryId, tokensBefore, usage, details }, fromExtension, controller.signal);
++            if (this._extensionRunner) {
+                 await this._extensionRunner.emit({
+                     type: "session_compact",
+-                    compactionEntry: savedCompactionEntry,
++                    compactionEntry: deepFreeze(structuredClone(committed.compactionEntry)),
+                     fromExtension,
+                     reason,
+                     willRetry,
+@@ -1740,7 +1839,7 @@
+                 summary,
+                 firstKeptEntryId,
+                 tokensBefore,
+-                estimatedTokensAfter,
++                estimatedTokensAfter: committed.estimatedTokensAfter,
+                 usage,
+                 details,
+             };
+@@ -1759,14 +1858,15 @@
+         }
+         catch (error) {
+             const errorMessage = error instanceof Error ? error.message : "compaction failed";
++            const aborted = controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
+             if (started) {
+                 this._emit({
+                     type: "compaction_end",
+                     reason,
+                     result: undefined,
+-                    aborted: false,
++                    aborted,
+                     willRetry: false,
+-                    errorMessage: reason === "overflow"
++                    errorMessage: aborted ? undefined : reason === "overflow"
+                         ? `Context overflow recovery failed: ${errorMessage}`
+                         : `Auto-compaction failed: ${errorMessage}`,
+                 });
+@@ -1774,7 +1874,7 @@
+             return false;
+         }
+         finally {
+-            this._autoCompactionAbortController = undefined;
++            this._finishCompaction("auto", controller);
+         }
+     }
+     /**
+--- a/dist/core/session-manager.js
++++ b/dist/core/session-manager.js
+@@ -210,17 +210,16 @@
+     if (compactionIdx < 0) {
+         return path;
+     }
+-    const contextEntries = [compaction];
+-    let foundFirstKept = false;
+-    for (let i = 0; i < compactionIdx; i++) {
+-        const entry = path[i];
+-        if (entry.id === compaction.firstKeptEntryId) {
+-            foundFirstKept = true;
+-        }
+-        if (foundFirstKept) {
+-            contextEntries.push(entry);
+-        }
++    const firstKeptIdx = path.findIndex((entry, index) => index < compactionIdx && entry.id === compaction.firstKeptEntryId);
++    if (firstKeptIdx < 0) {
++        // Corrupt or stale checkpoints must fail open to readable history,
++        // never hide the entire pre-compaction branch.
++        return path.filter((entry) => entry.type !== "compaction");
+     }
++    const contextEntries = [compaction];
++    // The latest checkpoint supersedes every older checkpoint in its kept
++    // range. Keep only original entries to avoid duplicate/stale summaries.
++    contextEntries.push(...path.slice(firstKeptIdx, compactionIdx).filter((entry) => entry.type !== "compaction"));
+     contextEntries.push(...path.slice(compactionIdx + 1));
+     return contextEntries;
+ }
+@@ -1335,4 +1334,4 @@
+         }
+     }
+ }
+-//# sourceMappingURL=session-manager.js.map
+\ No newline at end of file
++//# sourceMappingURL=session-manager.js.map
+--- a/dist/core/compaction/compaction.js
++++ b/dist/core/compaction/compaction.js
+@@ -490,9 +490,6 @@
+     return { text: textContent, usage: response.usage };
+ }
+ export function prepareCompaction(pathEntries, settings) {
+-    if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
+-        return undefined;
+-    }
+     let prevCompactionIndex = -1;
+     for (let i = pathEntries.length - 1; i >= 0; i--) {
+         if (pathEntries[i].type === "compaction") {
+@@ -502,15 +499,30 @@
+     }
+     let previousSummary;
+     let boundaryStart = 0;
++    let invalidPreviousCheckpoint = false;
+     if (prevCompactionIndex >= 0) {
+         const prevCompaction = pathEntries[prevCompactionIndex];
+-        previousSummary = prevCompaction.summary;
+         const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === prevCompaction.firstKeptEntryId);
+-        boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevCompactionIndex + 1;
++        if (firstKeptEntryIndex >= 0 && firstKeptEntryIndex < prevCompactionIndex) {
++            if (prevCompactionIndex === pathEntries.length - 1) {
++                return undefined;
++            }
++            previousSummary = prevCompaction.summary;
++            boundaryStart = firstKeptEntryIndex;
++        }
++        else {
++            // Invalid checkpoints are ignored completely. Re-summarize readable
++            // history from the branch root instead of trusting an opaque summary.
++            previousSummary = undefined;
++            boundaryStart = 0;
++            invalidPreviousCheckpoint = true;
++        }
+     }
+     const boundaryEnd = pathEntries.length;
+     const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
+-    const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
++    const cutPoint = invalidPreviousCheckpoint && prevCompactionIndex === pathEntries.length - 1
++        ? { firstKeptEntryIndex: prevCompactionIndex, turnStartIndex: -1, isSplitTurn: false }
++        : findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+     // Get UUID of first kept entry
+     const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
+     if (!firstKeptEntry?.id) {
+@@ -538,7 +550,7 @@
+         return undefined;
+     }
+     // Extract file operations from messages and previous compaction
+-    const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
++    const fileOps = extractFileOperations(messagesToSummarize, pathEntries, invalidPreviousCheckpoint ? -1 : prevCompactionIndex);
+     // Also extract file ops from turn prefix if splitting
+     if (cutPoint.isSplitTurn) {
+         for (const msg of turnPrefixMessages) {
+@@ -642,4 +654,4 @@
+         usage: response.usage,
+     };
+ }
+-//# sourceMappingURL=compaction.js.map
+\ No newline at end of file
++//# sourceMappingURL=compaction.js.map
+--- a/dist/core/extensions/runner.js
++++ b/dist/core/extensions/runner.js
+@@ -584,6 +584,21 @@
+                 try {
+                     const handlerResult = await handler(event, ctx);
+                     if (this.isSessionBeforeEvent(event) && handlerResult) {
++                        if (event.type === "session_before_compact" && result?.compaction && handlerResult.compaction) {
++                            const message = "Multiple extensions attempted to own the same compaction transaction";
++                            this.emitError({
++                                extensionPath: ext.path,
++                                event: event.type,
++                                error: message,
++                            });
++                            return { cancel: true };
++                        }
++                        if (event.type === "session_before_compact" && result?.compaction && !handlerResult.compaction) {
++                            if (handlerResult.cancel) {
++                                return handlerResult;
++                            }
++                            continue;
++                        }
+                         result = handlerResult;
+                         if (result.cancel) {
+                             return result;
+@@ -599,6 +614,9 @@
+                         error: message,
+                         stack,
+                     });
++                    if (event.type === "session_before_compact") {
++                        return { cancel: true };
++                    }
+                 }
+             }
+         }
+@@ -797,6 +815,10 @@
+                         error: message,
+                         stack,
+                     });
++                    // Payload rewriters own provider-request correctness. Sending
++                    // an unmodified payload after a failed rewrite can expose a
++                    // placeholder compaction summary or malformed tool history.
++                    throw err;
+                 }
+             }
+         }
+@@ -961,4 +983,4 @@
+             : { action: "continue" };
+     }
+ }
+-//# sourceMappingURL=runner.js.map
+\ No newline at end of file
++//# sourceMappingURL=runner.js.map
+--- a/docs/compaction.md
++++ b/docs/compaction.md
+@@ -76,7 +76,11 @@
+     prompt   from cmp          messages from firstKeptEntryId
+ ```
+ 
+-On repeated compactions, the summarized span starts at the previous compaction's kept boundary (`firstKeptEntryId`), not at the compaction entry itself, falling back to the entry after the previous compaction if that kept entry cannot be found in the path. This preserves messages that survived the earlier compaction by including them in the next summarization pass as well. Pi also recalculates `tokensBefore` from the rebuilt session context before writing the new `CompactionEntry`, so the token count reflects the actual pre-compaction context being replaced.
++On repeated compactions, the summarized span starts at the previous compaction's kept boundary (`firstKeptEntryId`), not at the compaction entry itself. Only the latest checkpoint is projected into model context; older checkpoint entries in its kept range are omitted.
++
++If a checkpoint's kept boundary is missing, after the checkpoint, or otherwise stale, Pi does not trust its summary. It fails open to the original readable branch, excludes stale checkpoint entries, and re-summarizes from the branch root. This recovery also applies when the invalid checkpoint is the current leaf. Pi recalculates `tokensBefore` from that rebuilt context before writing the replacement `CompactionEntry`.
++
++Compaction is committed transactionally: Pi pins the branch contents, model, and thinking level before authentication and summary generation, then validates that snapshot before persisting the exact returned checkpoint. Overlapping compaction owners and provider-payload rewrite failures cancel rather than committing ambiguous context.
+ 
+ ### Split Turns
+ 

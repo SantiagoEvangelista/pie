@@ -1,0 +1,178 @@
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -251,7 +251,7 @@
+  * Note: "xhigh" and "max" are only supported by selected model families. Use model
+  * thinking-level metadata from @earendil-works/pi-ai to detect support for a concrete model.
+  */
+-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
++export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultracode";
+ /**
+  * Extensible interface for custom app messages.
+  * Apps can extend via declaration merging:
+@@ -404,4 +404,4 @@
+     result: any;
+     isError: boolean;
+ };
+-//# sourceMappingURL=types.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=types.d.ts.map
+--- /dev/null
++++ b/dist/thinking-level.js
+@@ -0,0 +1,5 @@
++/** Convert harness-only thinking modes before crossing a provider boundary. */
++export function toProviderThinkingLevel(level) {
++    return level === "ultracode" ? "xhigh" : level;
++}
++//# sourceMappingURL=thinking-level.js.map
+--- /dev/null
++++ b/dist/thinking-level.d.ts
+@@ -0,0 +1,5 @@
++import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
++import type { ThinkingLevel } from "./types.ts";
++/** Convert harness-only thinking modes before crossing a provider boundary. */
++export declare function toProviderThinkingLevel(level: ThinkingLevel | undefined): ModelThinkingLevel | undefined;
++//# sourceMappingURL=thinking-level.d.ts.map
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -25,6 +25,7 @@
+ export * from "./proxy.js";
+ // Stream defaults
+ export { setDefaultStreamFn } from "./stream-fn.js";
++export { toProviderThinkingLevel } from "./thinking-level.js";
+ // Types
+ export * from "./types.js";
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
++//# sourceMappingURL=index.js.map
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -20,5 +20,6 @@
+ export * from "./harness/utils/truncate.ts";
+ export * from "./proxy.ts";
+ export { setDefaultStreamFn } from "./stream-fn.ts";
++export { toProviderThinkingLevel } from "./thinking-level.ts";
+ export * from "./types.ts";
+-//# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=index.d.ts.map
+--- a/dist/agent.js
++++ b/dist/agent.js
+@@ -1,5 +1,6 @@
+ import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+ import { getDefaultStreamFn } from "./stream-fn.js";
++import { toProviderThinkingLevel } from "./thinking-level.js";
+ function defaultConvertToLlm(messages) {
+     return messages.filter((message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult");
+ }
+@@ -283,7 +284,7 @@
+         let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
+         return {
+             model: this._state.model,
+-            reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
++            reasoning: this._state.thinkingLevel === "off" ? undefined : toProviderThinkingLevel(this._state.thinkingLevel),
+             sessionId: this.sessionId,
+             onPayload: this.onPayload,
+             onResponse: this.onResponse,
+@@ -410,4 +411,4 @@
+         }
+     }
+ }
+-//# sourceMappingURL=agent.js.map
+\ No newline at end of file
++//# sourceMappingURL=agent.js.map
+--- a/dist/agent-loop.js
++++ b/dist/agent-loop.js
+@@ -4,6 +4,7 @@
+  */
+ import { EventStream, validateToolArguments, } from "@earendil-works/pi-ai";
+ import { getDefaultStreamFn } from "./stream-fn.js";
++import { toProviderThinkingLevel } from "./thinking-level.js";
+ /**
+  * Start an agent loop with a new prompt message.
+  * The prompt is added to the context and events are emitted for it.
+@@ -145,7 +146,7 @@
+                         ? config.reasoning
+                         : nextTurnSnapshot.thinkingLevel === "off"
+                             ? undefined
+-                            : nextTurnSnapshot.thinkingLevel,
++                            : toProviderThinkingLevel(nextTurnSnapshot.thinkingLevel),
+                 };
+             }
+             if (await config.shouldStopAfterTurn?.({
+@@ -546,4 +547,4 @@
+     await emit({ type: "message_start", message: toolResultMessage });
+     await emit({ type: "message_end", message: toolResultMessage });
+ }
+-//# sourceMappingURL=agent-loop.js.map
+\ No newline at end of file
++//# sourceMappingURL=agent-loop.js.map
+--- a/dist/harness/agent-harness.js
++++ b/dist/harness/agent-harness.js
+@@ -6,6 +6,7 @@
+ import { formatPromptTemplateInvocation } from "./prompt-templates.js";
+ import { formatSkillInvocation } from "./skills.js";
+ import { AgentHarnessError, BranchSummaryError, CompactionError, SessionError, toError } from "./types.js";
++import { toProviderThinkingLevel } from "../thinking-level.js";
+ function createUserMessage(text, images) {
+     const content = [{ type: "text", text }];
+     if (images)
+@@ -357,7 +358,7 @@
+         const turnState = getTurnState();
+         return {
+             model: turnState.model,
+-            reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
++            reasoning: turnState.thinkingLevel === "off" ? undefined : toProviderThinkingLevel(turnState.thinkingLevel),
+             convertToLlm,
+             transformContext: async (messages) => {
+                 const result = await this.emitHook({ type: "context", messages: [...messages] });
+@@ -664,7 +665,7 @@
+             const provided = hookResult?.compaction;
+             const compactResult = provided
+                 ? { ok: true, value: provided }
+-                : await compact(preparation, this.models, model, customInstructions, undefined, this.thinkingLevel, this.retry, this.retryCallbacks("compaction"));
++                : await compact(preparation, this.models, model, customInstructions, undefined, toProviderThinkingLevel(this.thinkingLevel), this.retry, this.retryCallbacks("compaction"));
+             if (!compactResult.ok)
+                 throw compactResult.error;
+             const result = compactResult.value;
+@@ -962,4 +963,4 @@
+         return () => handlers.delete(handler);
+     }
+ }
+-//# sourceMappingURL=agent-harness.js.map
+\ No newline at end of file
++//# sourceMappingURL=agent-harness.js.map
+--- a/dist/harness/compaction/compaction.js
++++ b/dist/harness/compaction/compaction.js
+@@ -2,6 +2,7 @@
+ import { convertToLlm, createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage, } from "../messages.js";
+ import { buildSessionContext } from "../session/session.js";
+ import { CompactionError, err, ok } from "../types.js";
++import { toProviderThinkingLevel } from "../../thinking-level.js";
+ import { computeFileLists, createFileOps, extractFileOpsFromMessage, formatFileOperations, serializeConversation, } from "./utils.js";
+ function safeJsonStringify(value) {
+     try {
+@@ -413,7 +414,7 @@
+         },
+     ];
+     const completionOptions = model.reasoning && thinkingLevel && thinkingLevel !== "off"
+-        ? { maxTokens, signal, reasoning: thinkingLevel }
++        ? { maxTokens, signal, reasoning: toProviderThinkingLevel(thinkingLevel) }
+         : { maxTokens, signal };
+     const response = await completeSimpleWithRetries(models, model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages }, completionOptions, retry, callbacks);
+     if (response.stopReason === "aborted") {
+@@ -566,7 +567,7 @@
+         },
+     ];
+     const completionOptions = model.reasoning && thinkingLevel && thinkingLevel !== "off"
+-        ? { maxTokens, signal, reasoning: thinkingLevel }
++        ? { maxTokens, signal, reasoning: toProviderThinkingLevel(thinkingLevel) }
+         : { maxTokens, signal };
+     const response = await completeSimpleWithRetries(models, model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages }, completionOptions, retry, callbacks);
+     if (response.stopReason === "aborted") {
+@@ -580,4 +581,4 @@
+         usage: response.usage,
+     });
+ }
+-//# sourceMappingURL=compaction.js.map
+\ No newline at end of file
++//# sourceMappingURL=compaction.js.map
