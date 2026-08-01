@@ -1,0 +1,235 @@
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -105,6 +105,86 @@
+     }
+ }
+ /**
++ * Full-height layout with independently scrollable content and bottom-pinned chrome.
++ * The bottom component is always rendered at the terminal edge; unused content rows
++ * are padded so editor/footer components do not move as history grows.
++ */
++export class FixedBottomContainer extends Container {
++    content;
++    bottom;
++    getHeight;
++    requestRender;
++    scrollTop = 0;
++    maxScrollTop = 0;
++    viewportHeight = 0;
++    followBottom = true;
++    constructor(content, bottom, getHeight, requestRender) {
++        super();
++        this.content = content;
++        this.bottom = bottom;
++        this.getHeight = getHeight;
++        this.requestRender = requestRender;
++        this.children = [content, bottom];
++    }
++    getScrollState() {
++        return {
++            scrollTop: this.scrollTop,
++            maxScrollTop: this.maxScrollTop,
++            viewportHeight: this.viewportHeight,
++            followBottom: this.followBottom,
++        };
++    }
++    scrollBy(lines) {
++        if (!Number.isFinite(lines) || lines === 0)
++            return false;
++        const next = Math.max(0, Math.min(this.maxScrollTop, this.scrollTop + Math.trunc(lines)));
++        if (next === this.scrollTop)
++            return false;
++        this.scrollTop = next;
++        this.followBottom = next === this.maxScrollTop;
++        this.requestRender();
++        return true;
++    }
++    scrollPage(direction) {
++        return this.scrollBy(direction * Math.max(1, this.viewportHeight - 2));
++    }
++    scrollToTop() {
++        if (this.scrollTop === 0 && !this.followBottom)
++            return false;
++        this.scrollTop = 0;
++        this.followBottom = false;
++        this.requestRender();
++        return true;
++    }
++    scrollToBottom() {
++        if (this.scrollTop === this.maxScrollTop && this.followBottom)
++            return false;
++        this.scrollTop = this.maxScrollTop;
++        this.followBottom = true;
++        this.requestRender();
++        return true;
++    }
++    render(width) {
++        const contentLines = this.content.render(width);
++        const bottomLines = this.bottom.render(width);
++        const height = Math.max(1, Math.trunc(this.getHeight()));
++        const visibleBottom = bottomLines.slice(Math.max(0, bottomLines.length - height));
++        this.viewportHeight = Math.max(0, height - visibleBottom.length);
++        this.maxScrollTop = Math.max(0, contentLines.length - this.viewportHeight);
++        if (this.followBottom) {
++            this.scrollTop = this.maxScrollTop;
++        }
++        else {
++            this.scrollTop = Math.max(0, Math.min(this.maxScrollTop, this.scrollTop));
++        }
++        const visibleContent = contentLines.slice(this.scrollTop, this.scrollTop + this.viewportHeight);
++        while (visibleContent.length < this.viewportHeight) {
++            visibleContent.push("");
++        }
++        return [...visibleContent, ...visibleBottom];
++    }
++}
++/**
+  * TUI - Main class for managing terminal UI with differential rendering
+  */
+ export class TUI extends Container {
+@@ -133,6 +213,8 @@
+     pendingOsc11BackgroundQueries = [];
+     terminalColorSchemeListeners = new Set();
+     terminalColorSchemeNotificationsEnabled = false;
++    alternateScreen = false;
++    mouseTracking = false;
+     logDirectory;
+     // Overlay stack for modal components rendered on top of base content
+     focusOrderCounter = 0;
+@@ -172,6 +254,14 @@
+     setClearOnShrink(enabled) {
+         this.clearOnShrink = enabled;
+     }
++    /** Use terminal alternate screen so the rendered viewport stays fixed in place. */
++    setAlternateScreen(enabled) {
++        this.alternateScreen = enabled;
++    }
++    /** Enable basic SGR mouse events. Wheel events can then drive app-owned scrolling. */
++    setMouseTracking(enabled) {
++        this.mouseTracking = enabled;
++    }
+     setFocus(component) {
+         this.setFocusInternal({ component, overlayFocusRestore: "clear" });
+     }
+@@ -432,7 +522,13 @@
+     }
+     start() {
+         this.stopped = false;
++        if (this.alternateScreen) {
++            this.terminal.write("\x1b[?1049h\x1b[2J\x1b[H");
++        }
+         this.terminal.start((data) => this.handleInput(data), () => this.requestRender());
++        if (this.mouseTracking) {
++            this.terminal.write("\x1b[?1000h\x1b[?1006h");
++        }
+         this.terminal.hideCursor();
+         if (this.terminalColorSchemeNotificationsEnabled) {
+             this.terminal.write("\x1b[?2031h");
+@@ -481,6 +577,15 @@
+         }
+         if (this.terminalColorSchemeNotificationsEnabled) {
+             this.terminal.write("\x1b[?2031l");
++        }
++        if (this.mouseTracking) {
++            this.terminal.write("\x1b[?1006l\x1b[?1000l");
++        }
++        if (this.alternateScreen) {
++            this.terminal.showCursor();
++            this.terminal.stop();
++            this.terminal.write("\x1b[?1049l");
++            return;
+         }
+         // Move cursor to the end of the content to prevent overwriting/artifacts on exit
+         if (this.previousLines.length > 0) {
+@@ -1409,4 +1514,4 @@
+         });
+     }
+ }
+-//# sourceMappingURL=tui.js.map
+\ No newline at end of file
++//# sourceMappingURL=tui.js.map
+--- a/dist/tui.d.ts
++++ b/dist/tui.d.ts
+@@ -132,6 +132,30 @@
+     removeChild(component: Component): void;
+     clear(): void;
+     invalidate(): void;
++    render(width: number): string[];
++}
++export interface FixedBottomScrollState {
++    scrollTop: number;
++    maxScrollTop: number;
++    viewportHeight: number;
++    followBottom: boolean;
++}
++/** Full-height layout with independently scrollable content and bottom-pinned chrome. */
++export declare class FixedBottomContainer extends Container {
++    private readonly content;
++    private readonly bottom;
++    private readonly getHeight;
++    private readonly requestRender;
++    private scrollTop;
++    private maxScrollTop;
++    private viewportHeight;
++    private followBottom;
++    constructor(content: Component, bottom: Component, getHeight: () => number, requestRender: () => void);
++    getScrollState(): FixedBottomScrollState;
++    scrollBy(lines: number): boolean;
++    scrollPage(direction: -1 | 1): boolean;
++    scrollToTop(): boolean;
++    scrollToBottom(): boolean;
+     render(width: number): string[];
+ }
+ /**
+@@ -163,6 +187,8 @@
+     private pendingOsc11BackgroundQueries;
+     private terminalColorSchemeListeners;
+     private terminalColorSchemeNotificationsEnabled;
++    private alternateScreen;
++    private mouseTracking;
+     private readonly logDirectory;
+     private focusOrderCounter;
+     private overlayStack;
+@@ -178,6 +204,10 @@
+      * When false, empty rows remain (reduces redraws on slower terminals).
+      */
+     setClearOnShrink(enabled: boolean): void;
++    /** Use terminal alternate screen so the rendered viewport stays fixed in place. */
++    setAlternateScreen(enabled: boolean): void;
++    /** Enable basic SGR mouse events. Wheel events can then drive app-owned scrolling. */
++    setMouseTracking(enabled: boolean): void;
+     setFocus(component: Component | null): void;
+     private setFocusInternal;
+     private clearOverlayFocusRestore;
+@@ -266,4 +296,4 @@
+         timeoutMs: number;
+     }): Promise<TerminalColorScheme | undefined>;
+ }
+-//# sourceMappingURL=tui.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=tui.d.ts.map
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -28,7 +28,7 @@
+ export { parseOsc11BackgroundColor, parseTerminalColorSchemeReport, } from "./terminal-colors.js";
+ // Terminal image support
+ export { allocateImageId, calculateImageRows, deleteAllKittyImages, deleteKittyImage, detectCapabilities, encodeITerm2, encodeKitty, getCapabilities, getCellDimensions, getGifDimensions, getImageDimensions, getJpegDimensions, getPngDimensions, getWebpDimensions, hyperlink, imageFallback, renderImage, resetCapabilitiesCache, setCapabilities, setCellDimensions, } from "./terminal-image.js";
+-export { Container, CURSOR_MARKER, isFocusable, TUI, } from "./tui.js";
++export { Container, CURSOR_MARKER, FixedBottomContainer, isFocusable, TUI, } from "./tui.js";
+ // Utilities
+ export { sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
++//# sourceMappingURL=index.js.map
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -19,6 +19,6 @@
+ export { ProcessTerminal, type Terminal } from "./terminal.ts";
+ export { parseOsc11BackgroundColor, parseTerminalColorSchemeReport, type RgbColor, type TerminalColorScheme, } from "./terminal-colors.ts";
+ export { allocateImageId, type CellDimensions, calculateImageRows, deleteAllKittyImages, deleteKittyImage, detectCapabilities, encodeITerm2, encodeKitty, getCapabilities, getCellDimensions, getGifDimensions, getImageDimensions, getJpegDimensions, getPngDimensions, getWebpDimensions, hyperlink, type ImageDimensions, type ImageProtocol, type ImageRenderOptions, imageFallback, renderImage, resetCapabilitiesCache, setCapabilities, setCellDimensions, type TerminalCapabilities, } from "./terminal-image.ts";
+-export { type Component, Container, CURSOR_MARKER, type Focusable, isFocusable, type OverlayAnchor, type OverlayHandle, type OverlayMargin, type OverlayOptions, type OverlayUnfocusOptions, type SizeValue, TUI, } from "./tui.ts";
++export { type Component, Container, CURSOR_MARKER, FixedBottomContainer, type FixedBottomScrollState, type Focusable, isFocusable, type OverlayAnchor, type OverlayHandle, type OverlayMargin, type OverlayOptions, type OverlayUnfocusOptions, type SizeValue, TUI, } from "./tui.ts";
+ export { sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.ts";
+-//# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=index.d.ts.map

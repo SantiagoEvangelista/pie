@@ -1,0 +1,162 @@
+--- a/dist/modes/interactive/interactive-mode.js
++++ b/dist/modes/interactive/interactive-mode.js
+@@ -6,7 +6,7 @@
+ import * as fs from "node:fs";
+ import * as os from "node:os";
+ import * as path from "node:path";
+-import { CombinedAutocompleteProvider, Container, fuzzyFilter, getCapabilities, hyperlink, Markdown, matchesKey, ProcessTerminal, Spacer, setKeybindings, Text, TruncatedText, TUI, visibleWidth, } from "@earendil-works/pi-tui";
++import { CombinedAutocompleteProvider, Container, FixedBottomContainer, fuzzyFilter, getCapabilities, hyperlink, Markdown, matchesKey, ProcessTerminal, Spacer, setKeybindings, Text, TruncatedText, TUI, visibleWidth, } from "@earendil-works/pi-tui";
+ import chalk from "chalk";
+ import { spawn, spawnSync } from "child_process";
+ import { APP_NAME, APP_TITLE, CONFIG_DIR_NAME, getAgentDir, getAuthPath, getDebugLogPath, getDocsPath, getShareViewerUrl, VERSION, } from "../../config.js";
+@@ -101,6 +101,15 @@
+ function isUnknownModel(model) {
+     return !!model && model.provider === "unknown" && model.id === "unknown" && model.api === "unknown";
+ }
++function mouseWheelDirection(data) {
++    const match = data.match(/^\x1b\[<(\d+);\d+;\d+[Mm]$/);
++    if (!match)
++        return 0;
++    const code = Number(match[1]);
++    if ((code & 64) === 0)
++        return 0;
++    return (code & 1) === 0 ? -1 : 1;
++}
+ function quoteIfNeeded(value) {
+     if (value.length > 0 && !/[^a-zA-Z0-9_\-./~:@]/.test(value)) {
+         return value;
+@@ -164,6 +173,9 @@
+ export class InteractiveMode {
+     runtimeHost;
+     ui;
++    scrollContainer;
++    bottomContainer;
++    pinnedLayout;
+     loadedResourcesContainer;
+     chatContainer;
+     pendingMessagesContainer;
+@@ -274,7 +286,13 @@
+         });
+         this.version = VERSION;
+         this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor(), getAgentDir());
++        this.ui.setAlternateScreen(true);
++        this.ui.setMouseTracking(true);
++        process.env.PI_FIXED_LAYOUT_ACTIVE = "1";
+         this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
++        this.scrollContainer = new Container();
++        this.bottomContainer = new Container();
++        this.pinnedLayout = new FixedBottomContainer(this.scrollContainer, this.bottomContainer, () => this.ui.terminal.rows, () => this.ui.requestRender());
+         this.headerContainer = new Container();
+         this.loadedResourcesContainer = new Container();
+         this.chatContainer = new Container();
+@@ -481,16 +499,17 @@
+         }
+         // Add header container as first child. Populate it after applying theme settings.
+         // Keep loaded resources before chat so restored session messages never precede them.
+-        this.ui.addChild(this.headerContainer);
+-        this.ui.addChild(this.loadedResourcesContainer);
+-        this.ui.addChild(this.chatContainer);
+-        this.ui.addChild(this.pendingMessagesContainer);
+-        this.ui.addChild(this.statusContainer);
++        this.scrollContainer.addChild(this.headerContainer);
++        this.scrollContainer.addChild(this.loadedResourcesContainer);
++        this.scrollContainer.addChild(this.chatContainer);
++        this.bottomContainer.addChild(this.pendingMessagesContainer);
++        this.bottomContainer.addChild(this.statusContainer);
+         this.renderWidgets(); // Initialize with default spacer
+-        this.ui.addChild(this.widgetContainerAbove);
+-        this.ui.addChild(this.editorContainer);
+-        this.ui.addChild(this.widgetContainerBelow);
+-        this.ui.addChild(this.footer);
++        this.bottomContainer.addChild(this.widgetContainerAbove);
++        this.bottomContainer.addChild(this.editorContainer);
++        this.bottomContainer.addChild(this.widgetContainerBelow);
++        this.bottomContainer.addChild(this.footer);
++        this.ui.addChild(this.pinnedLayout);
+         this.ui.setFocus(this.editor);
+         this.setupKeyHandlers();
+         this.setupEditorSubmitHandler();
+@@ -547,6 +566,7 @@
+         this.ui.requestRender();
+         // Initialize extensions first so resources are shown before messages
+         await this.rebindCurrentSession();
++        this.setupPinnedLayoutScrolling();
+         // Render initial messages AFTER showing loaded resources
+         this.renderInitialMessages();
+         // Set up theme file watcher
+@@ -1582,20 +1602,20 @@
+         }
+         // Remove current footer from UI
+         if (this.customFooter) {
+-            this.ui.removeChild(this.customFooter);
++            this.bottomContainer.removeChild(this.customFooter);
+         }
+         else {
+-            this.ui.removeChild(this.footer);
++            this.bottomContainer.removeChild(this.footer);
+         }
+         if (factory) {
+             // Create and add custom footer, passing the data provider
+             this.customFooter = factory(this.ui, theme, this.footerDataProvider);
+-            this.ui.addChild(this.customFooter);
++            this.bottomContainer.addChild(this.customFooter);
+         }
+         else {
+             // Restore built-in footer
+             this.customFooter = undefined;
+-            this.ui.addChild(this.footer);
++            this.bottomContainer.addChild(this.footer);
+         }
+         this.ui.requestRender();
+     }
+@@ -2009,6 +2029,35 @@
+     // =========================================================================
+     // Key Handlers
+     // =========================================================================
++    setupPinnedLayoutScrolling() {
++        this.ui.addInputListener((data) => {
++            if (this.ui.hasOverlay() || this.extensionSelector || this.extensionInput || this.extensionEditor) {
++                return undefined;
++            }
++            const wheel = mouseWheelDirection(data);
++            if (wheel !== 0) {
++                this.pinnedLayout.scrollBy(wheel * 3);
++                return { consume: true };
++            }
++            if (matchesKey(data, "ctrl+shift+pageup")) {
++                this.pinnedLayout.scrollToTop();
++                return { consume: true };
++            }
++            if (matchesKey(data, "ctrl+shift+pagedown")) {
++                this.pinnedLayout.scrollToBottom();
++                return { consume: true };
++            }
++            if (matchesKey(data, "shift+pageup")) {
++                this.pinnedLayout.scrollPage(-1);
++                return { consume: true };
++            }
++            if (matchesKey(data, "shift+pagedown")) {
++                this.pinnedLayout.scrollPage(1);
++                return { consume: true };
++            }
++            return undefined;
++        });
++    }
+     setupKeyHandlers() {
+         // Set up handlers on defaultEditor - they use this.editor for text access
+         // so they work correctly regardless of which editor is active
+@@ -2102,6 +2151,7 @@
+     }
+     setupEditorSubmitHandler() {
+         this.defaultEditor.onSubmit = async (text) => {
++            this.pinnedLayout.scrollToBottom();
+             text = text.trim();
+             if (!text)
+                 return;
+@@ -5068,4 +5118,4 @@
+         this.unregisterSignalHandlers();
+     }
+ }
+-//# sourceMappingURL=interactive-mode.js.map
+\ No newline at end of file
++//# sourceMappingURL=interactive-mode.js.map

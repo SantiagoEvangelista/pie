@@ -10,7 +10,24 @@ fi
 patches="$(CDPATH= cd -- "$(dirname "$0")/../patches" && pwd)"
 agent_session="$root/dist/core/agent-session.js"
 agent_core="$root/node_modules/@earendil-works/pi-agent-core"
+tui="$root/node_modules/@earendil-works/pi-tui"
 conversion="${PI_CODEX_CONVERSION_PACKAGE:-$HOME/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion}"
+
+if grep -q 'export class FixedBottomContainer' "$tui/dist/tui.js" &&
+   grep -q 'setAlternateScreen(enabled)' "$tui/dist/tui.js"; then
+  echo "Pi TUI pinned layout patch already applied"
+else
+  patch -d "$tui" -p1 < "$patches/pi-tui-0.83-pinned-layout.patch"
+  echo "Applied Pi TUI pinned layout patch"
+fi
+
+if grep -q 'setupPinnedLayoutScrolling' "$root/dist/modes/interactive/interactive-mode.js" &&
+   grep -q 'PI_FIXED_LAYOUT_ACTIVE' "$root/dist/modes/interactive/interactive-mode.js"; then
+  echo "Pi pinned layout patch already applied"
+else
+  patch -d "$root" -p1 < "$patches/pi-0.83-pinned-layout.patch"
+  echo "Applied Pi pinned layout patch"
+fi
 
 if grep -q '_compactBetweenAgentTurns' "$agent_session"; then
   echo "Pi inline compaction patch already applied"
@@ -49,28 +66,36 @@ else
 fi
 
 if [ -d "$conversion" ]; then
-  if grep -q 'level === "ultracode"' "$conversion/dist/extension/runtime.js" &&
-     grep -q 'selectedLevel === "ultracode"' "$conversion/dist/adapter/compaction/compaction.js"; then
-    echo "Pi Codex conversion ultracode patch already applied"
+  conversion_version="$(node -p "require('$conversion/package.json').version")"
+  if [ "$conversion_version" != "3.0.5" ]; then
+    echo "Skipping Pi Codex conversion patches: require 3.0.5, found $conversion_version"
   else
-    patch -d "$conversion" -p1 < "$patches/pi-codex-conversion-3.0.5-ultracode.patch"
-    echo "Applied Pi Codex conversion ultracode patch"
-  fi
+    if grep -q 'level === "ultracode"' "$conversion/dist/extension/runtime.js" &&
+       grep -q 'selectedLevel === "ultracode"' "$conversion/dist/adapter/compaction/compaction.js"; then
+      echo "Pi Codex conversion ultracode patch already applied"
+    else
+      patch -d "$conversion" -p1 < "$patches/pi-codex-conversion-3.0.5-ultracode.patch"
+      echo "Applied Pi Codex conversion ultracode patch"
+    fi
 
-  if grep -q 'readableFallback' "$conversion/dist/adapter/compaction/compaction.js" &&
-     grep -q 'one canonical compaction output item and no additional output' "$conversion/dist/adapter/compaction/remote-v2-client.js" &&
-     grep -q 'withRemoteCompactionV2ForBody' "$conversion/dist/providers/openai-codex-custom-provider.js" &&
-     grep -q 'never result.stdout/result.stderr' "$conversion/dist/tools/code-mode/custom-tool-prompt.js" &&
-     ! grep -q 'buildLenientNativeReplayPayload' "$conversion/dist/adapter/replay/native-replay-matching.js" &&
-     ! grep -q 'buildLenientNativeReplayPayload' "$conversion/dist/adapter/replay/native-replay-segments.js"; then
-    echo "Pi Codex conversion compaction hardening patch already applied"
-  else
-    patch -d "$conversion" -p1 < "$patches/pi-codex-conversion-3.0.5-compaction-hardening.patch"
-    echo "Applied Pi Codex conversion compaction hardening patch"
+    if grep -q 'readableFallback' "$conversion/dist/adapter/compaction/compaction.js" &&
+       grep -q 'one canonical compaction output item and no additional output' "$conversion/dist/adapter/compaction/remote-v2-client.js" &&
+       grep -q 'withRemoteCompactionV2ForBody' "$conversion/dist/providers/openai-codex-custom-provider.js" &&
+       grep -q 'never result.stdout/result.stderr' "$conversion/dist/tools/code-mode/custom-tool-prompt.js" &&
+       ! grep -q 'buildLenientNativeReplayPayload' "$conversion/dist/adapter/replay/native-replay-matching.js" &&
+       ! grep -q 'buildLenientNativeReplayPayload' "$conversion/dist/adapter/replay/native-replay-segments.js"; then
+      echo "Pi Codex conversion compaction hardening patch already applied"
+    else
+      patch -d "$conversion" -p1 < "$patches/pi-codex-conversion-3.0.5-compaction-hardening.patch"
+      echo "Applied Pi Codex conversion compaction hardening patch"
+    fi
   fi
 fi
 
 node --check "$agent_session"
+node --check "$tui/dist/tui.js"
+node --check "$tui/dist/index.js"
+node --check "$root/dist/modes/interactive/interactive-mode.js"
 node --check "$root/dist/core/session-manager.js"
 node --check "$root/dist/core/compaction/compaction.js"
 node --check "$root/dist/core/extensions/runner.js"

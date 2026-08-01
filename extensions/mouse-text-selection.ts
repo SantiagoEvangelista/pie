@@ -16,6 +16,8 @@ import {
 
 const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const DISABLE_MOUSE = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+const ENABLE_DRAG_MOUSE = "\x1b[?1002h";
+const DISABLE_DRAG_MOUSE = "\x1b[?1002l";
 const MOUSE_EVENT = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
 const SELECT_START = "\x1b[7m";
 const SELECT_END = "\x1b[27m";
@@ -185,6 +187,10 @@ class MouseSelectionEditor extends CustomEditor {
 		this.setSelectionMode(false);
 	}
 
+	isMouseSelectionModeArmed(): boolean {
+		return this.selectionModeArmed;
+	}
+
 	private setCursorPosition(position: Position): void {
 		const editor = this.internals;
 		const line = Math.max(0, Math.min(position.line, editor.state.lines.length - 1));
@@ -347,6 +353,7 @@ class MouseSelectionEditor extends CustomEditor {
 
 		const mouse = parseMouseEvent(data);
 		if (mouse) {
+			if (!this.selectionModeArmed) return;
 			this.handleMouse(mouse);
 			return;
 		}
@@ -450,13 +457,13 @@ let mouseEnabled = false;
 
 function enableMouse(): void {
 	if (mouseEnabled || !process.stdout.isTTY) return;
-	process.stdout.write(ENABLE_MOUSE);
+	process.stdout.write(process.env.PI_FIXED_LAYOUT_ACTIVE === "1" ? ENABLE_DRAG_MOUSE : ENABLE_MOUSE);
 	mouseEnabled = true;
 }
 
 function disableMouse(): void {
 	if (!mouseEnabled || !process.stdout.isTTY) return;
-	process.stdout.write(DISABLE_MOUSE);
+	process.stdout.write(process.env.PI_FIXED_LAYOUT_ACTIVE === "1" ? DISABLE_DRAG_MOUSE : DISABLE_MOUSE);
 	mouseEnabled = false;
 }
 
@@ -477,11 +484,16 @@ export default function mouseTextSelection(pi: ExtensionAPI): void {
 
 		unsubscribeInput = ctx.ui.onTerminalInput((data) => {
 			if (!MOUSE_EVENT.test(data)) return undefined;
+			const mouse = parseMouseEvent(data);
+			if (mouse?.wheel) {
+				editor?.cancelMouseSelectionMode();
+				return undefined;
+			}
 			const focused = editor && editorTui
 				? (editorTui as unknown as TuiInternals).focusedComponent === editor
 				: false;
 			if (!focused) editor?.cancelMouseSelectionMode();
-			return focused ? undefined : { consume: true };
+			return focused && editor?.isMouseSelectionModeArmed() ? undefined : { consume: true };
 		});
 
 		process.once("exit", onExit);

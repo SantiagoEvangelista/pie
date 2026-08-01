@@ -1,5 +1,14 @@
 # Local Pi patches
 
+`pi-tui-0.83-pinned-layout.patch` adds a full-height layout primitive plus
+alternate-screen and mouse lifecycle controls. `pi-0.83-pinned-layout.patch`
+uses it to keep pending/status/widgets/editor/footer pinned to the terminal
+bottom while header and conversation history scroll independently. Mouse wheel
+scrolls three rows, `Shift+PageUp`/`Shift+PageDown` scroll pages, and
+`Ctrl+Shift+PageUp`/`Ctrl+Shift+PageDown` jump to top/bottom. Submitting input
+returns to live-tail mode. Alternate screen intentionally replaces native shell
+scrollback while Pi runs and restores it on exit or suspend.
+
 `pi-0.83-inline-compaction.patch` runs auto-compaction from agent-core's
 `prepareNextTurn` boundary. It replaces active history and continues the same
 agent turn, matching Codex inline compaction instead of aborting and injecting a
@@ -35,6 +44,7 @@ Focused regression suite:
 
 ```sh
 ~/.pi/agent/packages/my-pi-setup/scripts/test-compaction-hardening.sh
+~/.pi/agent/packages/my-pi-setup/scripts/test-pinned-layout.sh
 ```
 
 Pi updates overwrite the global runtime file. Reapply with:
