@@ -34,6 +34,7 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import { defaultDelegatedReasoningEffort } from "../../../shared/intelligence-tiering.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
 import { toProviderThinkingLevel } from "../../../shared/thinking-level.ts";
 
@@ -278,7 +279,11 @@ const makePiSession = (
     });
     // pi's thinking levels ARE the shared reasoning-effort scale.
     const thinkingLevel = toProviderThinkingLevel(
-      task.reasoningEffort ?? task.parent.inheritedThinkingLevel,
+      task.reasoningEffort ??
+        defaultDelegatedReasoningEffort(
+          model?.id,
+          task.parent.inheritedThinkingLevel,
+        ),
     ) as ThinkingLevel | undefined;
 
     const session = yield* Effect.tryPromise({

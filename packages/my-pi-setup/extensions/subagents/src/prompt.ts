@@ -26,9 +26,9 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   model:
-    'Pi model hint as "provider/model-id" or a model id. Classify task first, then select explicitly: bounded execution tier uses openai-codex/gpt-5.6-terra; advanced reasoning tier uses openai-codex/gpt-5.6-sol. Omit only when inheritance is intentional.',
+    'Pi model hint as "provider/model-id" or a model id. Use openai-codex/gpt-5.6-sol for delegated work and tier intelligence with reasoning_effort. Omit only when inheritance is intentional.',
   reasoningEffort:
-    "Pi thinking level. Prefer low/medium with Terra and high/xhigh with Sol. Omit only when inheritance is intentional.",
+    "Pi thinking level. Use medium for bounded GPT-5.6 Sol tasks and high for advanced GPT-5.6 Sol tasks. Omit only when inheritance is intentional.",
 };
 
 /** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */

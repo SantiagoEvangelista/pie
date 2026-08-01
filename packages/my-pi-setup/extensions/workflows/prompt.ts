@@ -13,12 +13,13 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
     "JavaScript workflow script. May start with `export const meta = {...}`, then use phase(), agent(), parallel(), args, and a final `return`.",
   args: "Optional JSON string exposed to the script as `args` (parsed when valid JSON, otherwise passed through as the raw string).",
   background:
-    "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress).",
+    "Execution mode. Interactive sessions default to true: return immediately, end the parent turn, and deliver completion later. Set false only when the result is required in the current turn. Headless sessions always block.",
 };
 
 /** Defines the workflow DSL, constraints, reliability guidance, and model-authored task examples. */
 export const WORKFLOW_TOOL_DESCRIPTION = [
   "Outside ultracode effort mode, call workflow only when the user specifically requests a workflow run. In ultracode mode, workflow orchestration is the default for nontrivial tasks.",
+  "Interactive workflow calls run in the background by default. Launch workflow as the final action, then end the current turn; do not poll, rerun it, or duplicate its work locally. The user may continue the conversation while it runs, and completion arrives as a follow-up. Set `background: false` only when the result is required in the current turn. Headless sessions always block.",
   "Run a multi-agent workflow from a JavaScript orchestration script you write inline. Every child is an isolated in-process pi subagent; Claude Code and Codex CLI harnesses are unavailable. Use this when a task benefits from fanning work out across several isolated subagents in ordered phases (research fan-out, per-file review, verify-then-synthesize pipelines).",
   "The script runs as an async function body with these primitives:",
   "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
@@ -33,7 +34,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "export const meta = { name: 'reliability-review', description: 'Review modules for reliability risks, then report', phases: [{ title: 'Scan' }, { title: 'Report' }] }",
   "const FINDINGS = { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] }",
   "phase('Scan')",
-  "const scans = await parallel(args.files.map((f) => () => agent(`Review ${f} for correctness and reliability risks.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS, provider: 'openai-codex', model: 'gpt-5.6-terra', effort: 'medium' })))",
+  "const scans = await parallel(args.files.map((f) => () => agent(`Review ${f} for correctness and reliability risks.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS, provider: 'openai-codex', model: 'gpt-5.6-sol', effort: 'medium' })))",
   "const findings = scans.filter((r) => r.ok).map((r) => r.structured)",
   "phase('Report')",
   "const report = await agent(`Summarize these findings: ${JSON.stringify(findings)}`, { label: 'report', phase: 'Report', provider: 'openai-codex', model: 'gpt-5.6-sol', effort: 'high' })",
@@ -47,6 +48,7 @@ export const WORKFLOW_PROMPT_SNIPPET =
 /** Guides the model on appropriate workflow fan-out and mandatory agent result checks. */
 export const WORKFLOW_PROMPT_GUIDELINES = [
   "Outside ultracode effort mode, use workflow only when explicitly requested. In ultracode mode, use workflow by default for nontrivial tasks needing decomposition, parallel work, review, or verification; keep trivial single-step work in the main session.",
+  "Interactive workflows run in the background by default. Launch one as the final action and end the current turn; do not poll, rerun, or duplicate its work. The user can keep chatting and completion arrives as a follow-up. Use `background: false` only when its result is required in the current turn; headless runs always block.",
   "In workflow scripts, agent() never throws — always check `.ok` on its result before using `.output`/`.structured`.",
   ...DELEGATED_MODEL_TIERING_GUIDELINES,
 ];
@@ -116,6 +118,6 @@ export function buildBackgroundWorkflowLaunchResult(options: {
   return [
     `Workflow ${options.name ? `"${options.name}"` : options.runId} launched in background (run ${options.runId}).`,
     `Artifacts: ${shortenHome(options.runDir)}`,
-    "You'll receive a follow-up message when it finishes; /workflows shows progress.",
+    "This turn ends now. Don't poll; the user can keep chatting and completion arrives as a follow-up.",
   ].join("\n");
 }

@@ -14,9 +14,9 @@
  * `agent()` always resolves to `{ ok, output, structured?, error? }` — it
  * never throws into the script. Scripts branch on `ok` explicitly.
  *
- * Runs are blocking by default (live progress in the tool block). Pass
- * `background: true` to return immediately and get a follow-up message when
- * the run finishes. Run artifacts (script, args, statuses, result) are saved
+ * Interactive runs use background mode by default, return immediately, and
+ * end the parent turn; pass `background: false` when the result is required in
+ * that turn. Headless runs always block. Run artifacts are saved
  * under `~/.pi/agent/workflows/<runId>/` for inspection; result and bounded
  * transcripts use separate artifacts, and there is no resume.
  */
@@ -34,8 +34,10 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import { defaultDelegatedReasoningEffort } from "../shared/intelligence-tiering.ts";
 import { toProviderThinkingLevel } from "../shared/thinking-level.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
+import { resolveWorkflowBackground } from "./background-policy.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
 import {
@@ -403,7 +405,10 @@ export default function workflows(pi: ExtensionAPI) {
       const meta = prepared.meta;
       const runId = `wf_${randomBytes(6).toString("hex")}`;
       const runDir = path.join(getAgentDir(), "workflows", runId);
-      const background = (params.background ?? false) && ctx.hasUI;
+      const background = resolveWorkflowBackground(
+        params.background,
+        ctx.hasUI,
+      );
 
       const details: WorkflowDetails = {
         runId,
@@ -566,9 +571,12 @@ export default function workflows(pi: ExtensionAPI) {
             record.contextWindow = model?.contextWindow;
             emit();
 
-            // Effort → thinking level; default inherits the parent session.
+            // Effort → thinking level; tier default applies before parent inheritance.
             let thinkingLevel = toProviderThinkingLevel(
-              String(pi.getThinkingLevel()),
+              defaultDelegatedReasoningEffort(
+                model?.id,
+                String(pi.getThinkingLevel()),
+              ),
             ) as ThinkingLevel;
             if (opts.effort !== undefined) {
               const effort = String(opts.effort);
@@ -727,6 +735,7 @@ export default function workflows(pi: ExtensionAPI) {
             },
           ],
           details: compactToolDetails(details),
+          terminate: true,
         };
       }
 
