@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   boundedArtifactTranscript,
   createWorkflowPersistence,
+  persistAgentOutput,
   persistWorkflowJson,
 } from "./artifacts.ts";
 import {
@@ -107,6 +108,19 @@ test("live artifact persistence includes current agents and transcripts", () => 
         durationMs: 15,
       },
     );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("full agent output artifact preserves Unicode and tail bytes", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-agent-output-"));
+  try {
+    const output = `${"évidence\n".repeat(20_000)}TAIL_SENTINEL`;
+    const artifact = persistAgentOutput(directory, 3, output);
+
+    assert.equal(artifact, "agent-3-output.txt");
+    assert.equal(readFileSync(join(directory, artifact), "utf8"), output);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

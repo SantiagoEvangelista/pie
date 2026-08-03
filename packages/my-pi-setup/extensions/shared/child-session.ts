@@ -26,6 +26,66 @@ export function childToolPolicy() {
   return { excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES] };
 }
 
+const CHILD_MIN_RESERVE_TOKENS = 16_384;
+const CHILD_MAX_RESERVE_TOKENS = 65_536;
+const CHILD_MIN_KEEP_RECENT_TOKENS = 4_096;
+
+/** Configure child compaction without changing persisted settings. */
+export function configureChildCompaction(
+  settingsManager: Pick<
+    SettingsManager,
+    "getCompactionSettings" | "applyOverrides"
+  >,
+  contextWindow: number,
+): void {
+  const inherited = settingsManager.getCompactionSettings();
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
+    settingsManager.applyOverrides({ compaction: { enabled: true } });
+    return;
+  }
+
+  const halfWindow = Math.floor(contextWindow / 2);
+  const reserveFloor = Math.min(
+    halfWindow,
+    Math.max(
+      CHILD_MIN_RESERVE_TOKENS,
+      Math.min(
+        CHILD_MAX_RESERVE_TOKENS,
+        Math.floor(contextWindow * 0.25),
+      ),
+    ),
+  );
+  const inheritedReserveTokens =
+    Number.isFinite(inherited.reserveTokens) && inherited.reserveTokens >= 0
+      ? inherited.reserveTokens
+      : 0;
+  const reserveTokens = Math.min(
+    halfWindow,
+    Math.max(reserveFloor, inheritedReserveTokens),
+  );
+  const keepCapacity = Math.floor((contextWindow - reserveTokens) / 2);
+  const inheritedKeepRecentTokens =
+    Number.isFinite(inherited.keepRecentTokens) &&
+    inherited.keepRecentTokens >= 0
+      ? inherited.keepRecentTokens
+      : keepCapacity;
+  const keepRecentTokens =
+    keepCapacity >= CHILD_MIN_KEEP_RECENT_TOKENS
+      ? Math.max(
+          CHILD_MIN_KEEP_RECENT_TOKENS,
+          Math.min(keepCapacity, inheritedKeepRecentTokens),
+        )
+      : keepCapacity;
+
+  settingsManager.applyOverrides({
+    compaction: {
+      enabled: true,
+      reserveTokens,
+      keepRecentTokens,
+    },
+  });
+}
+
 export interface ChildResourceOptions {
   cwd: string;
   projectTrusted: boolean;

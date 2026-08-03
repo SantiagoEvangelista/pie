@@ -17,11 +17,82 @@ import {
   bindChildSessionExtensions,
   CHILD_EXCLUDED_TOOL_NAMES,
   childToolPolicy,
+  configureChildCompaction,
   createChildResources,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
   type DisposableChildSession,
 } from "./child-session.ts";
+
+test("child compaction enables and bounds inherited settings", () => {
+  const overrides: unknown[] = [];
+  const settingsManager = {
+    getCompactionSettings: () => ({
+      enabled: false,
+      reserveTokens: 13_600,
+      keepRecentTokens: 64_000,
+    }),
+    applyOverrides: (value: unknown) => {
+      overrides.push(value);
+    },
+  } as Parameters<typeof configureChildCompaction>[0];
+
+  configureChildCompaction(settingsManager, 272_000);
+
+  assert.deepEqual(overrides, [
+    {
+      compaction: {
+        enabled: true,
+        reserveTokens: 65_536,
+        keepRecentTokens: 64_000,
+      },
+    },
+  ]);
+});
+
+test("child compaction caps oversized recent tokens", () => {
+  const overrides: unknown[] = [];
+  const settingsManager = {
+    getCompactionSettings: () => ({
+      enabled: true,
+      reserveTokens: 13_600,
+      keepRecentTokens: 64_000,
+    }),
+    applyOverrides: (value: unknown) => {
+      overrides.push(value);
+    },
+  } as Parameters<typeof configureChildCompaction>[0];
+
+  configureChildCompaction(settingsManager, 64_000);
+
+  assert.deepEqual(overrides, [
+    {
+      compaction: {
+        enabled: true,
+        reserveTokens: 16_384,
+        keepRecentTokens: 23_808,
+      },
+    },
+  ]);
+});
+
+test("invalid child compaction window only enables compaction", () => {
+  const overrides: unknown[] = [];
+  const settingsManager = {
+    getCompactionSettings: () => ({
+      enabled: false,
+      reserveTokens: 13_600,
+      keepRecentTokens: 64_000,
+    }),
+    applyOverrides: (value: unknown) => {
+      overrides.push(value);
+    },
+  } as Parameters<typeof configureChildCompaction>[0];
+
+  configureChildCompaction(settingsManager, 0);
+
+  assert.deepEqual(overrides, [{ compaction: { enabled: true } }]);
+});
 
 async function withTempDir(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-child-policy-"));

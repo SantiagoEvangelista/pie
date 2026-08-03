@@ -15,7 +15,6 @@ import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import type {
   AgentSession,
   AgentSessionEvent,
-  ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -34,9 +33,14 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
-import { defaultDelegatedReasoningEffort } from "../../../shared/intelligence-tiering.ts";
+import {
+  defaultDelegatedReasoningEffort,
+  isDelegatedReasoningEffortAllowed,
+} from "../../../shared/intelligence-tiering.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
+import { configureChildCompaction } from "../../../shared/child-session.ts";
 import { toProviderThinkingLevel } from "../../../shared/thinking-level.ts";
+import { resolvePiModel } from "../pi-model-routing.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -56,43 +60,6 @@ const CHILD_EXCLUDED_TOOL_NAMES = [
 type ThinkingLevel = NonNullable<
   NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"]
 >;
-
-/**
- * Resolve the generic model hint against the parent registry (v1 semantics):
- * "provider/model-id" is exact; a bare id prefers the inherited provider,
- * then must be unambiguous across providers. No hint inherits the parent
- * model; with nothing to inherit, the SDK default applies.
- */
-function resolvePiModel(
-  registry: ModelRegistry,
-  hint: string | undefined,
-  inherited: { provider: string; id: string } | undefined,
-): Model<any> | undefined {
-  if (!hint) {
-    if (!inherited) return undefined;
-    return registry.find(inherited.provider, inherited.id) ?? undefined;
-  }
-  const slash = hint.indexOf("/");
-  if (slash > 0) {
-    const provider = hint.slice(0, slash);
-    const id = hint.slice(slash + 1);
-    const found = registry.find(provider, id);
-    if (found) return found;
-    throw new Error(`Unknown model "${hint}".`);
-  }
-  if (inherited) {
-    const found = registry.find(inherited.provider, hint);
-    if (found) return found;
-  }
-  const matches = registry.getAll().filter((m) => m.id === hint);
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1) {
-    throw new Error(
-      `Model "${hint}" exists in multiple providers (${matches.map((m) => m.provider).join(", ")}). Use "provider/${hint}".`,
-    );
-  }
-  throw new Error(`Unknown model "${hint}".`);
-}
 
 // --- Child session helpers (ported from v1 shared/child-session.ts) -----------
 
@@ -277,11 +244,24 @@ const makePiSession = (
         resolvePiModel(registry, task.model, task.parent.inheritedModel),
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
+    if (
+      task.reasoningEffort &&
+      !isDelegatedReasoningEffortAllowed(
+        model.provider,
+        model.id,
+        task.reasoningEffort,
+      )
+    ) {
+      return yield* new SpawnError({
+        message: `${model.id} delegated work requires reasoning_effort "medium" or "high".`,
+      });
+    }
     // pi's thinking levels ARE the shared reasoning-effort scale.
     const thinkingLevel = toProviderThinkingLevel(
       task.reasoningEffort ??
         defaultDelegatedReasoningEffort(
-          model?.id,
+          model.provider,
+          model.id,
           task.parent.inheritedThinkingLevel,
         ),
     ) as ThinkingLevel | undefined;
@@ -292,6 +272,7 @@ const makePiSession = (
           task.cwd,
           task.parent.projectTrusted,
         );
+        configureChildCompaction(settingsManager, model.contextWindow);
         const { session } = await createAgentSession({
           cwd: task.cwd,
           sessionManager: SessionManager.create(task.cwd),
@@ -319,6 +300,8 @@ const makePiSession = (
       closed: false,
       /** prompt() rejection for the active run; folded into RunSettled. */
       runError: undefined as string | undefined,
+      /** Latest compaction failure, cleared by a later successful compaction. */
+      compactionError: undefined as string | undefined,
       /** One terminal event per run: lifecycle, prompt-rejection, and abort
        * fallbacks can all race to settle; the first wins. */
       settled: false,
@@ -381,7 +364,19 @@ const makePiSession = (
         });
         return;
       }
+      if (last?.stopReason === "length") {
+        emit({
+          _tag: "RunSettled",
+          outcome: {
+            _tag: "Failed",
+            errorText: "Run stopped because model reached its output length limit.",
+            partialText,
+          },
+        });
+        return;
+      }
       const errorText =
+        state.compactionError ??
         state.runError ??
         (last?.stopReason === "error"
           ? (last.errorMessage ?? "Run failed")
@@ -445,6 +440,13 @@ const makePiSession = (
           // toolResult messages are covered by tool_execution_end.
           break;
         }
+        case "compaction_end":
+          if (event.errorMessage) {
+            state.compactionError = boundedError(event.errorMessage);
+          } else if (event.result !== undefined && !event.aborted) {
+            state.compactionError = undefined;
+          }
+          break;
         case "tool_execution_start":
           emit({
             _tag: "ToolStart",
@@ -500,6 +502,11 @@ const makePiSession = (
         } catch {
           // Continue with abort/dispose.
         }
+        try {
+          session.abortCompaction();
+        } catch {
+          // Continue with run abort.
+        }
         await waitBounded(session.abort(), CHILD_SHUTDOWN_TIMEOUT_MS);
         await shutdownAndDisposeChildSession(session);
         Queue.endUnsafe(events);
@@ -509,6 +516,7 @@ const makePiSession = (
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
       state.runError = undefined;
+      state.compactionError = undefined;
       state.settled = false;
       emit({ _tag: "RunStarted" });
       void session.prompt(text).catch((error) => {
@@ -554,6 +562,11 @@ const makePiSession = (
           session.clearQueue();
         } catch {
           // Abort regardless.
+        }
+        try {
+          session.abortCompaction();
+        } catch {
+          // Continue with run abort.
         }
         await session.abort().catch(() => undefined);
         // Only resolve once streaming has actually stopped: reporting the

@@ -71,6 +71,8 @@ export interface AgentRecord {
   startedAt: number;
   finishedAt?: number;
   error?: string;
+  /** Relative path to uncropped final output when transport output was bounded. */
+  outputArtifact?: string;
   preview: string;
   usage: AgentUsage;
   /** Normalized, serializable subagent conversation shown by /workflows. */

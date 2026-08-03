@@ -22,6 +22,10 @@ or active/pending autocomplete. Per-artifact upgrade patches let partial install
 self-repair; clean installs receive them from the consolidated pinned-layout
 patch.
 
+`pi-tui-0.83-clean-markdown.patch` keeps Markdown parsing, ANSI styling, syntax
+highlighting, lists, and code indentation while hiding source-only heading
+markers and fenced-code delimiters from rendered assistant messages.
+
 `pi-0.83-pinned-listener-order.patch` upgrades an existing pinned-layout
 install so its wheel listener is re-registered after every extension bind.
 This preserves Option-A cancellation after reload/rebind; clean installs receive

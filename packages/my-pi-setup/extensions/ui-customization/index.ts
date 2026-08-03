@@ -2,7 +2,6 @@ import { homedir } from "node:os";
 import { relative } from "node:path";
 import {
   CustomEditor,
-  type EditorFactory,
   type ExtensionAPI,
   type ExtensionContext,
   type KeybindingsManager,
@@ -15,6 +14,7 @@ import {
   visibleWidth,
   type Component,
   type EditorComponent,
+  type EditorTheme,
   type Focusable,
   type TUI,
 } from "@earendil-works/pi-tui";
@@ -33,6 +33,10 @@ import {
   type FooterAction,
   type FooterNavigationIntent,
 } from "./footer-navigation.ts";
+import {
+  applyPersistentBackground,
+  renderFocusedActionLabel,
+} from "./theme-rendering.ts";
 
 type Rgb = [number, number, number];
 interface RenderableNode {
@@ -118,10 +122,7 @@ class DashboardFooter implements Component, Focusable {
     if (!this.focused || this.selection.current() !== action) {
       return this.theme.fg("accent", text);
     }
-    return this.theme.bg(
-      "selectedBg",
-      this.theme.bold(this.theme.fg("text", ` ${text} `)),
-    );
+    return renderFocusedActionLabel(this.theme, text);
   }
 
   private renderActions(width: number): string {
@@ -146,12 +147,12 @@ class DashboardFooter implements Component, Focusable {
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const PALETTE: Rgb[] = [
-  [22, 83, 189],
-  [48, 129, 247],
-  [93, 171, 255],
-  [151, 205, 255],
-  [93, 171, 255],
-  [48, 129, 247],
+  [198, 97, 63],
+  [217, 119, 87],
+  [235, 159, 127],
+  [244, 174, 148],
+  [235, 159, 127],
+  [217, 119, 87],
 ];
 const TITLE_LINES = [
   "  ██████╗  ██╗ ",
@@ -302,7 +303,9 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let activeFooter: DashboardFooter | undefined;
-  let previousEditorFactory: EditorFactory | undefined;
+  let previousEditorFactory: ReturnType<
+    ExtensionContext["ui"]["getEditorComponent"]
+  >;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
 
   const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
@@ -415,9 +418,32 @@ export default function uiCustomization(pi: ExtensionAPI) {
     });
 
     previousEditorFactory = ctx.ui.getEditorComponent();
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      const editor = (previousEditorFactory?.(tui, theme, keybindings) ??
-        new CustomEditor(tui, theme, keybindings)) as BoundaryAwareEditor;
+    ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
+      const selectedText = (text: string) =>
+        ctx.ui.theme.bg(
+          "selectedBg",
+          ctx.ui.theme.bold(ctx.ui.theme.fg("text", text)),
+        );
+      const themedEditor: EditorTheme = {
+        ...editorTheme,
+        selectList: {
+          ...editorTheme.selectList,
+          selectedPrefix: selectedText,
+          selectedText,
+        },
+      };
+      const editor = (
+        previousEditorFactory?.(
+          tui,
+          themedEditor,
+          keybindings,
+        ) ?? new CustomEditor(tui, themedEditor, keybindings)
+      ) as BoundaryAwareEditor;
+      const render = editor.render.bind(editor);
+      editor.render = (width: number) => {
+        const background = ctx.ui.theme.getBgAnsi("customMessageBg");
+        return applyPersistentBackground(render(width), background);
+      };
       const handleInput = editor.handleInput.bind(editor);
 
       editor.handleInput = (data: string) => {

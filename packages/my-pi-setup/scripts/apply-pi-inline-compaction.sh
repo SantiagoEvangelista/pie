@@ -54,6 +54,14 @@ else
   echo "Applied Pi TUI footer navigation interface patch"
 fi
 
+if grep -q 'Hide source-only heading markers' "$tui/dist/components/markdown.js" &&
+   grep -q 'Hide source-only fences' "$tui/dist/components/markdown.js"; then
+  echo "Pi TUI clean Markdown patch already applied"
+else
+  patch -d "$tui" -p1 < "$patches/pi-tui-0.83-clean-markdown.patch"
+  echo "Applied Pi TUI clean Markdown patch"
+fi
+
 if grep -q 'setupPinnedLayoutScrolling' "$root/dist/modes/interactive/interactive-mode.js" &&
    grep -q 'PI_FIXED_LAYOUT_ACTIVE' "$root/dist/modes/interactive/interactive-mode.js"; then
   echo "Pi pinned layout patch already applied"
@@ -136,6 +144,7 @@ node --check "$agent_session"
 node --check "$tui/dist/tui.js"
 node --check "$tui/dist/index.js"
 node --check "$tui/dist/components/editor.js"
+node --check "$tui/dist/components/markdown.js"
 node --check "$root/dist/modes/interactive/interactive-mode.js"
 node --check "$root/dist/core/session-manager.js"
 node --check "$root/dist/core/compaction/compaction.js"

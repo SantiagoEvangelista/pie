@@ -20,24 +20,24 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
 export const WORKFLOW_TOOL_DESCRIPTION = [
   "Outside ultracode effort mode, call workflow only when the user specifically requests a workflow run. In ultracode mode, workflow orchestration is the default for nontrivial tasks.",
   "Interactive workflow calls run in the background by default. Launch workflow as the final action, then end the current turn; do not poll, rerun it, or duplicate its work locally. The user may continue the conversation while it runs, and completion arrives as a follow-up. Set `background: false` only when the result is required in the current turn. Headless sessions always block.",
-  "Run a multi-agent workflow from a JavaScript orchestration script you write inline. Every child is an isolated in-process pi subagent; Claude Code and Codex CLI harnesses are unavailable. Use this when a task benefits from fanning work out across several isolated subagents in ordered phases (research fan-out, per-file review, verify-then-synthesize pipelines).",
+  "Run a multi-agent workflow from a JavaScript orchestration script you write inline. Every child is an isolated in-process pi subagent; Claude Code and Codex CLI harnesses are unavailable. Use this when a task benefits from ordered batches of narrow, orthogonal investigation, disjoint implementation, and independent verification. Return evidence to the parent orchestrator for final synthesis.",
   "The script runs as an async function body with these primitives:",
   "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
   "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
-  "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE in-process pi subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the pi session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max|ultracode); ultracode maps to xhigh for children. Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
+  "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE in-process pi subagent on one atomic purpose and wait for it. Split prompts containing multiple independent files, questions, stages, or deliverables into separate calls or later batches. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. Omitted model/effort defaults to GPT-5.6 Sol/medium; select the same model with high effort for advanced work. Sol children accept medium or high; ultracode remains parent-only. `effort` accepts off|minimal|low|medium|high|xhigh|max|ultracode for other explicit models. Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
   ...DELEGATED_MODEL_TIERING_GUIDELINES.map((line) => `• ${line}`),
-  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. Concurrency is globally capped at 4 for the run.",
+  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. Concurrency is globally capped at 4; use multiple purposeful batches when more agents improve coverage.",
   "• args — the parsed value of the `args` tool parameter (or undefined).",
-  "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. A run may make at most 32 agent calls and has no overall deadline. Each agent must receive its first assistant response event within 45 seconds so silent provider requests fail clearly; after that, agent() has no wall-clock deadline. Each individual child tool call times out independently after 3 minutes, becomes an error tool result, and leaves the agent loop free to recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
-  "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. There is no resume: a failed run is simply re-run. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection.",
+  "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. A run may make at most 32 agent calls and has no overall deadline. Every model request must emit an assistant response event within 45 seconds, and each compaction must finish within 5 minutes, so silent provider or summarization stalls fail clearly with partial output. Each individual child tool call times out independently after 3 minutes, becomes an error tool result, and leaves the agent loop free to recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
+  "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. There is no resume: a failed run is simply re-run. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection; oversized final child output stays bounded in model context and is preserved in a per-agent output artifact.",
   "Example:",
   "export const meta = { name: 'reliability-review', description: 'Review modules for reliability risks, then report', phases: [{ title: 'Scan' }, { title: 'Report' }] }",
   "const FINDINGS = { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] }",
   "phase('Scan')",
-  "const scans = await parallel(args.files.map((f) => () => agent(`Review ${f} for correctness and reliability risks.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS, provider: 'openai-codex', model: 'gpt-5.6-sol', effort: 'medium' })))",
+  "const scans = await parallel(args.files.map((f) => () => agent(`Inspect only ${f} for correctness and reliability risks. Do not explore adjacent files except direct callers needed as evidence.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS, provider: 'openai-codex', model: 'gpt-5.6-sol', effort: 'medium' })))",
   "const findings = scans.filter((r) => r.ok).map((r) => r.structured)",
   "phase('Report')",
-  "const report = await agent(`Summarize these findings: ${JSON.stringify(findings)}`, { label: 'report', phase: 'Report', provider: 'openai-codex', model: 'gpt-5.6-sol', effort: 'high' })",
+  "const report = await agent(`Deeply validate only cross-cutting or high-stakes findings and return evidence for parent adjudication: ${JSON.stringify(findings)}`, { label: 'deep-check', phase: 'Report', provider: 'openai-codex', model: 'gpt-5.6-sol', effort: 'high' })",
   "return { findings, report: report.ok ? report.output : report.error }",
 ].join("\n");
 
@@ -91,7 +91,8 @@ export function buildWorkflowResultMessage(
             : "running";
       lines.push(
         `- [${agent.label}]${agent.phase ? ` (${agent.phase})` : ""} ${status}` +
-          (agent.error ? ` — ${agent.error}` : ""),
+          (agent.error ? ` — ${agent.error}` : "") +
+          (agent.outputArtifact ? ` — full output: ${agent.outputArtifact}` : ""),
       );
     }
   }

@@ -24,6 +24,7 @@
       "./extensions/compact-tool-summary/index.ts",
       "./extensions/ask-user/index.ts",
       "./extensions/background-terminals/index.ts",
+      "./extensions/monitor/index.ts",
       "./extensions/git-info/index.ts",
       "./extensions/model-info/index.ts",
       "./extensions/subagents/index.ts",

@@ -15,6 +15,8 @@ import {
 } from "@earendil-works/pi-tui";
 
 const MOUSE_EVENT = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
+const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1006h";
 const SELECT_START = "\x1b[7m";
 const SELECT_END = "\x1b[27m";
 
@@ -174,8 +176,11 @@ class MouseSelectionEditor extends CustomEditor {
 	private setSelectionMode(armed: boolean): void {
 		if (this.selectionModeArmed === armed) return;
 		this.selectionModeArmed = armed;
-		this.tui.setMouseMotionTracking(armed);
+		// Pi keeps basic mouse reporting enabled for transcript scrolling. Suspend it
+		// so the terminal can perform native selection across the whole viewport.
+		this.tui.setMouseMotionTracking(false);
 		this.onSelectionModeChange(armed);
+		this.tui.terminal.write(armed ? MOUSE_TRACKING_OFF : MOUSE_TRACKING_ON);
 	}
 
 	cancelMouseSelectionMode(): void {
@@ -457,7 +462,10 @@ export default function mouseTextSelection(pi: ExtensionAPI): void {
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
 			editorTui = tui;
 			editor = new MouseSelectionEditor(tui, theme, keybindings, (armed) => {
-				ctx.ui.setStatus("mouse-selection", armed ? "mouse selection: drag once (Esc cancels)" : undefined);
+				ctx.ui.setStatus(
+					"mouse-selection",
+					armed ? "screen selection: drag/copy (Option+A or Esc ends)" : undefined,
+				);
 			});
 			return editor;
 		});

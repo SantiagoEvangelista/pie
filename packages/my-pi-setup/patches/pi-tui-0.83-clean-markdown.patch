@@ -1,0 +1,38 @@
+--- a/dist/components/markdown.js
++++ b/dist/components/markdown.js
+@@ -225,7 +225,6 @@
+         switch (token.type) {
+             case "heading": {
+                 const headingLevel = token.depth;
+-                const headingPrefix = `${"#".repeat(headingLevel)} `;
+                 // Build a heading-specific style context so inline tokens (codespan, bold, etc.)
+                 // restore heading styling after their own ANSI resets instead of falling back to
+                 // the default text style.
+@@ -242,7 +241,8 @@
+                     stylePrefix: this.getStylePrefix(headingStyleFn),
+                 };
+                 const headingText = this.renderInlineTokens(token.tokens || [], headingStyleContext);
+-                const styledHeading = headingLevel >= 3 ? headingStyleFn(headingPrefix) + headingText : headingText;
++                // Hide source-only heading markers; terminal styling already conveys hierarchy.
++                const styledHeading = headingText;
+                 lines.push(styledHeading);
+                 if (nextTokenType && nextTokenType !== "space") {
+                     lines.push(""); // Add spacing after headings (unless space token follows)
+@@ -265,8 +265,8 @@
+                 break;
+             }
+             case "code": {
+                 const indent = this.theme.codeBlockIndent ?? "  ";
+-                lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
++                // Hide source-only fences; indentation and syntax highlighting identify code.
+                 if (this.theme.highlightCode) {
+                     const highlightedLines = this.theme.highlightCode(token.text, token.lang);
+                     for (const hlLine of highlightedLines) {
+@@ -279,7 +279,6 @@
+                         lines.push(`${indent}${this.theme.codeBlock(codeLine)}`);
+                     }
+                 }
+-                lines.push(this.theme.codeBlockBorder("```"));
+                 if (nextTokenType && nextTokenType !== "space") {
+                     lines.push("");
+                 }

@@ -1,0 +1,16 @@
+{
+  "name": "monitor",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types --experimental-loader ./test-loader.mjs *.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

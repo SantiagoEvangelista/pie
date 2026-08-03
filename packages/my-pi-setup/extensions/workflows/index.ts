@@ -38,9 +38,16 @@ import {
   OPEN_DASHBOARD_CHANNEL,
   isDashboardAction,
 } from "../shared/dashboard-state.ts";
-import { defaultDelegatedReasoningEffort } from "../shared/intelligence-tiering.ts";
+import {
+  defaultDelegatedReasoningEffort,
+  isDelegatedReasoningEffortAllowed,
+} from "../shared/intelligence-tiering.ts";
 import { toProviderThinkingLevel } from "../shared/thinking-level.ts";
-import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
+import {
+  createWorkflowPersistence,
+  persistAgentOutput,
+  persistWorkflowJson,
+} from "./artifacts.ts";
 import { resolveWorkflowBackground } from "./background-policy.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
@@ -49,6 +56,7 @@ import {
   prepareWorkflowScript,
   type WorkflowMeta,
 } from "./meta.ts";
+import { resolveWorkflowModel } from "./model-routing.ts";
 import {
   agentContext,
   aggregateUsage,
@@ -521,6 +529,11 @@ export default function workflows(pi: ExtensionAPI) {
           typeof opts.label === "string" && opts.label.trim()
             ? opts.label.trim().slice(0, 160)
             : `agent-${index}`;
+        const modelResolution = resolveWorkflowModel(
+          ctx.modelRegistry,
+          opts.model,
+          opts.provider,
+        );
 
         const record: AgentRecord = {
           index,
@@ -530,8 +543,8 @@ export default function workflows(pi: ExtensionAPI) {
               ? opts.phase.slice(0, 160)
               : details.currentPhase,
           state: "running",
-          model: ctx.model?.id,
-          contextWindow: ctx.model?.contextWindow,
+          model: modelResolution.model?.id,
+          contextWindow: modelResolution.model?.contextWindow,
           startedAt: Date.now(),
           preview: "",
           usage: emptyUsage(),
@@ -558,56 +571,18 @@ export default function workflows(pi: ExtensionAPI) {
           return fail("agent() requires a non-empty prompt string");
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
+        if (!modelResolution.model)
+          return fail(`agent "${label}": ${modelResolution.error}`);
+
+        const model = modelResolution.model;
 
         return controller
           .schedule(async (runSignal) => {
-            // Model/provider resolution: default to the parent session's model.
-            let model: WorkflowModel | undefined = ctx.model;
-            if (opts.model !== undefined || opts.provider !== undefined) {
-              const modelOpt =
-                typeof opts.model === "string" ? opts.model : undefined;
-              const providerOpt =
-                typeof opts.provider === "string" ? opts.provider : undefined;
-              if (!modelOpt)
-                return fail(
-                  `agent "${label}": \`provider\` requires \`model\` as well`,
-                );
-              let resolved: WorkflowModel | undefined;
-              if (providerOpt) {
-                resolved = ctx.modelRegistry.find(providerOpt, modelOpt);
-              } else {
-                const slash = modelOpt.indexOf("/");
-                if (slash > 0) {
-                  resolved = ctx.modelRegistry.find(
-                    modelOpt.slice(0, slash),
-                    modelOpt.slice(slash + 1),
-                  );
-                }
-                resolved ??= ctx.modelRegistry
-                  .getAll()
-                  .find((m) => m.id === modelOpt);
-              }
-              if (!resolved) {
-                const requested = providerOpt
-                  ? `${providerOpt}/${modelOpt}`
-                  : modelOpt;
-                return fail(
-                  `agent "${label}": unknown model "${requested}" (use provider/id)`,
-                );
-              }
-              model = resolved;
-            }
-            record.model = model?.id;
-            record.contextWindow = model?.contextWindow;
+            record.model = model.id;
+            record.contextWindow = model.contextWindow;
             emit();
 
-            // Effort → thinking level; tier default applies before parent inheritance.
-            let thinkingLevel = toProviderThinkingLevel(
-              defaultDelegatedReasoningEffort(
-                model?.id,
-                String(pi.getThinkingLevel()),
-              ),
-            ) as ThinkingLevel;
+            let selectedEffort: string;
             if (opts.effort !== undefined) {
               const effort = String(opts.effort);
               if (!(THINKING_LEVELS as readonly string[]).includes(effort)) {
@@ -615,8 +590,28 @@ export default function workflows(pi: ExtensionAPI) {
                   `agent "${label}": invalid effort "${effort}" (use ${THINKING_LEVELS.join("|")})`,
                 );
               }
-              thinkingLevel = toProviderThinkingLevel(effort) as ThinkingLevel;
+              if (
+                !isDelegatedReasoningEffortAllowed(
+                  model.provider,
+                  model.id,
+                  effort,
+                )
+              ) {
+                return fail(
+                  `agent "${label}": ${model.id} delegated work requires effort "medium" or "high"`,
+                );
+              }
+              selectedEffort = effort;
+            } else {
+              selectedEffort = defaultDelegatedReasoningEffort(
+                model.provider,
+                model.id,
+                String(pi.getThinkingLevel()),
+              );
             }
+            const thinkingLevel = toProviderThinkingLevel(
+              selectedEffort,
+            ) as ThinkingLevel;
 
             const resources = await getResources(opts.schema !== undefined);
             const outcome = await runAgent({
@@ -640,6 +635,19 @@ export default function workflows(pi: ExtensionAPI) {
               },
             });
 
+            let artifactError: string | undefined;
+            if (outcome.fullOutput !== undefined) {
+              try {
+                record.outputArtifact = persistAgentOutput(
+                  runDir,
+                  record.index,
+                  outcome.fullOutput,
+                );
+              } catch (error) {
+                artifactError = `Failed to persist full agent output: ${errorText(error)}`;
+              }
+            }
+
             record.usage = outcome.usage;
             record.model = outcome.model ?? record.model;
             record.contextWindow =
@@ -650,21 +658,23 @@ export default function workflows(pi: ExtensionAPI) {
               PREVIEW_LENGTH,
             );
             record.finishedAt = Date.now();
-            record.state = outcome.ok ? "done" : "error";
-            if (outcome.ok) {
+            const effectiveError = artifactError ?? outcome.error;
+            const effectiveOk = outcome.ok && effectiveError === undefined;
+            record.state = effectiveOk ? "done" : "error";
+            if (effectiveOk) {
               delete record.error;
             } else {
-              record.error = outcome.error ?? "Agent failed";
+              record.error = effectiveError ?? "Agent failed";
             }
             emit();
 
             return {
-              ok: outcome.ok,
+              ok: effectiveOk,
               output: outcome.output,
               ...(outcome.structured !== undefined
                 ? { structured: outcome.structured }
                 : {}),
-              ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+              ...(effectiveError !== undefined ? { error: effectiveError } : {}),
             };
           }, invocationSignal)
           .catch((error) => fail(errorText(error)));

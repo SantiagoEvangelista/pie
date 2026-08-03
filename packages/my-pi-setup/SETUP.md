@@ -25,6 +25,10 @@ The `file-search` extension registers `fd` and `rg` as model tools. No setup is 
 
 ## Theme
 
+The compatibility slug remains `github-dark-default`, but its palette is a
+Claude-inspired warm variant with clay/coral accents and neutral charcoal
+surfaces instead of GitHub blue.
+
 Add the included theme to `~/.pi/agent/settings.json` while keeping your existing settings:
 
 ```json

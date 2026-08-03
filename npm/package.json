@@ -5,10 +5,11 @@
     "@async23/pi-codex-fast": "^0.2.1",
     "@capyup/pi-auto-compact": "^0.2.4",
     "@howaboua/pi-codex-conversion": "^3.0.7",
-    "pi-caveman": "^1.0.7",
+    "@juicesharp/rpiv-todo": "^2.3.1",
+    "pi-caveman": "^1.0.8",
     "pi-rtk-optimizer": "^0.9.0",
     "pi-smart-compact": "^7.12.1",
     "pi-tool-display": "^0.5.0",
-    "pi-web-access": "^0.17.1"
+    "pi-web-access": "^0.18.0"
   }
 }

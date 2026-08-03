@@ -4,15 +4,15 @@ import { DELEGATED_MODEL_TIERING_GUIDELINES } from "../../shared/intelligence-ti
 
 /** Describes subagent_spawn and the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background pi subagent: a fully autonomous, headless, in-process pi session with its own context window and this environment's tools and config. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can run at once.";
+  "Spawn a background pi subagent for one atomic purpose: a fully autonomous, headless, in-process pi session with its own context window and this environment's tools and config. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Split compound work into additional calls or later batches. Only use trusted working directories. Max 4 subagents can run at once.";
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
-  "Spawn a background pi subagent with its own context and normal tools for a self-contained task";
+  "Spawn a background pi subagent with its own context and normal tools for one self-contained atomic task";
 
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
-  "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
+  "Use subagent_spawn to delegate one atomic, self-contained purpose that can run in the background; give it a complete standalone prompt and split compound work into more calls or later batches.",
   "All subagents use the in-process pi harness; Claude Code and Codex CLI harnesses are disabled.",
   "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
   ...DELEGATED_MODEL_TIERING_GUIDELINES,
@@ -21,14 +21,14 @@ export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   prompt:
-    "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
+    "Atomic task prompt for the subagent. Must be self-contained and limited to one purpose: include exact inputs, owned file/question/change, concrete deliverable, acceptance criteria, explicit stop condition, and out-of-scope work. Split compound work into more subagents.",
   name: "Short human-readable name for this subagent, shown in listings and the UI",
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   model:
-    'Pi model hint as "provider/model-id" or a model id. Use openai-codex/gpt-5.6-sol for delegated work and tier intelligence with reasoning_effort. Omit only when inheritance is intentional.',
+    'Pi model hint as "provider/model-id" or a model id. Omitted defaults to openai-codex/gpt-5.6-sol. Use the same Sol model for worker and advanced tasks; reasoning_effort selects the tier.',
   reasoningEffort:
-    "Pi thinking level. Use medium for bounded GPT-5.6 Sol tasks and high for advanced GPT-5.6 Sol tasks. Omit only when inheritance is intentional.",
+    'Pi thinking level. Omitted Sol children default to medium; use high for advanced work. Sol children accept only "medium" or "high"; ultracode remains parent-only.',
 };
 
 /** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */

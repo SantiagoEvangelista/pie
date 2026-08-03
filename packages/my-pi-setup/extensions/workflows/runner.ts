@@ -27,6 +27,7 @@ import { Type, type TSchema } from "typebox";
 import {
   bindChildSessionExtensions,
   childToolPolicy,
+  configureChildCompaction,
   createChildResources,
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
@@ -41,9 +42,14 @@ import { safeStringify, truncateUtf8 } from "./serialization.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
 export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
+export const COMPACTION_TIMEOUT_MS = 5 * 60_000;
 const TRANSCRIPT_ENTRY_MAX_BYTES = 16 * 1024;
 const TRANSCRIPT_TOTAL_MAX_BYTES = 256 * 1024;
 const TRANSCRIPT_MAX_ENTRIES = 200;
+const LENGTH_STOP_REASON_ERROR =
+  "Agent stopped because the response reached its output length limit; partial output was retained.";
+const OUTPUT_TRUNCATION_MARKER =
+  "\n[agent output truncated; full text saved in per-agent artifact]";
 
 export type WorkflowModel = NonNullable<ExtensionContext["model"]>;
 export type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -63,6 +69,8 @@ export interface AgentOutcome {
   ok: boolean;
   /** Final assistant text (may be empty when only structured output was produced). */
   output: string;
+  /** Present only when output was bounded for workflow/model transport. */
+  fullOutput?: string;
   /** Captured structured_output payload when a schema was supplied. */
   structured?: unknown;
   error?: string;
@@ -94,8 +102,10 @@ export interface RunAgentOptions {
   onProgress?: (progress: AgentProgress) => void;
   /** Test-only override for the per-tool execution timeout. */
   toolCallTimeoutMs?: number;
-  /** Test-only override for the first assistant response-event timeout. */
+  /** Test-only override for each assistant response-event timeout. */
   firstResponseTimeoutMs?: number;
+  /** Test-only override for a single compaction operation timeout. */
+  compactionTimeoutMs?: number;
 }
 
 /** Build a fresh extension runtime for each concurrent workflow child. */
@@ -205,6 +215,27 @@ function finalOutput(messages: AgentMessage[]): string {
     if (text) return text;
   }
   return "";
+}
+
+/** Bound model-visible output while preserving oversized text for local artifacts. */
+export function boundAgentOutput(
+  value: string,
+  maxBytes = AGENT_OUTPUT_MAX_BYTES,
+): { output: string; fullOutput?: string } {
+  const capacity = Math.max(0, Math.floor(maxBytes));
+  if (Buffer.byteLength(value, "utf8") <= capacity) return { output: value };
+  const markerBytes = Buffer.byteLength(OUTPUT_TRUNCATION_MARKER, "utf8");
+  if (capacity <= markerBytes) {
+    return {
+      output: truncateUtf8(OUTPUT_TRUNCATION_MARKER, capacity),
+      fullOutput: value,
+    };
+  }
+  const prefix = truncateUtf8(value, capacity - markerBytes);
+  return {
+    output: `${prefix}${OUTPUT_TRUNCATION_MARKER}`,
+    fullOutput: value,
+  };
 }
 
 function safeJson(value: unknown): string {
@@ -366,11 +397,55 @@ function computeUsage(messages: AgentMessage[]): AgentUsage {
   return usage;
 }
 
+/** Replace compaction-aware occupancy instead of retaining a stale estimate. */
+export function withCurrentContextTokens(
+  usage: AgentUsage,
+  tokens: number | null | undefined,
+): AgentUsage {
+  const current = { ...usage };
+  delete current.contextTokens;
+  if (
+    typeof tokens === "number" &&
+    Number.isFinite(tokens) &&
+    tokens >= 0
+  ) {
+    current.contextTokens = tokens;
+  }
+  return current;
+}
+
 function errorText(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(
     0,
     16 * 1024,
   );
+}
+
+/** Normalize explicit terminal errors and classify length-limited responses. */
+export function classifyAgentFailure(
+  stopReason: string | undefined,
+  explicitError?: string,
+): string | undefined {
+  if (explicitError !== undefined) return errorText(explicitError);
+  if (stopReason === "error") return "Agent failed";
+  if (stopReason === "length") return LENGTH_STOP_REASON_ERROR;
+  return undefined;
+}
+
+/** Read only the current terminal assistant state; successful retries clear old errors. */
+export function latestAssistantStatus(messages: AgentSession["messages"]): {
+  stopReason?: string;
+  errorMessage?: string;
+} {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    return {
+      stopReason: message.stopReason,
+      errorMessage: message.errorMessage,
+    };
+  }
+  return {};
 }
 
 function formatTimeout(timeoutMs: number) {
@@ -379,34 +454,82 @@ function formatTimeout(timeoutMs: number) {
     : `${timeoutMs} ms`;
 }
 
-/** Abort a provider call that opens but never emits its first assistant event. */
+/** Abort any provider turn that opens but never emits an assistant event. */
 export function createFirstResponseWatchdog(
   onTimeout: () => Promise<unknown>,
   options: { timeoutMs?: number; model?: string } = {},
 ) {
   const timeoutMs = options.timeoutMs ?? FIRST_RESPONSE_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectTimeout: (error: Error) => void = () => {};
   const timeout = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  const cancel = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  const markRequest = () => {
+    cancel();
     timer = setTimeout(() => {
       timer = undefined;
       const model = options.model ? ` for ${options.model}` : "";
-      reject(
+      rejectTimeout(
         new Error(
           `Agent received no assistant response event${model} within ${formatTimeout(timeoutMs)}; the provider request may be stalled. Retry the workflow.`,
         ),
       );
       void onTimeout().catch(() => {});
     }, timeoutMs);
-    timer.unref?.();
-  });
+  };
+  markRequest();
 
+  return {
+    markRequest,
+    markResponse: cancel,
+    async waitFor<T>(operation: Promise<T>) {
+      try {
+        return await Promise.race([operation, timeout]);
+      } finally {
+        cancel();
+      }
+    },
+  };
+}
+
+/** Bound a compaction request so a stuck summary cannot strand a workflow. */
+export function createCompactionWatchdog(
+  onTimeout: () => Promise<unknown>,
+  options: { timeoutMs?: number; model?: string } = {},
+) {
+  const timeoutMs = options.timeoutMs ?? COMPACTION_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectTimeout: (error: Error) => void = () => {};
+  const timeout = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
   const cancel = () => {
     if (timer) clearTimeout(timer);
     timer = undefined;
   };
+  const markStart = (reason?: string) => {
+    cancel();
+    timer = setTimeout(() => {
+      timer = undefined;
+      const model = options.model ? ` for ${options.model}` : "";
+      const label = reason ? ` (${reason})` : "";
+      rejectTimeout(
+        new Error(
+          `Agent compaction${label}${model} did not finish within ${formatTimeout(timeoutMs)}; partial output was retained.`,
+        ),
+      );
+      void onTimeout().catch(() => {});
+    }, timeoutMs);
+  };
 
   return {
-    markResponse: cancel,
+    markStart,
+    markEnd: cancel,
     async waitFor<T>(operation: Promise<T>) {
       try {
         return await Promise.race([operation, timeout]);
@@ -442,6 +565,10 @@ export async function runAgent(
             }),
           ]
         : undefined;
+    configureChildCompaction(
+      options.settingsManager,
+      options.model?.contextWindow ?? 0,
+    );
     ({ session } = await createAgentSession({
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
@@ -479,7 +606,9 @@ export async function runAgent(
   let modelId = childSession.model?.id ?? options.model?.id;
   let contextWindow = childSession.model?.contextWindow;
   let stopReason: string | undefined;
-  let errorMessage: string | undefined;
+  let assistantErrorMessage: string | undefined;
+  let runErrorMessage: string | undefined;
+  let compactionErrorMessage: string | undefined;
   const toolTimings = new Map<string, ToolExecutionTiming>();
 
   const sync = () => {
@@ -490,13 +619,7 @@ export async function runAgent(
     modelId = sessionModel?.id ?? modelId;
     contextWindow = sessionModel?.contextWindow ?? contextWindow;
     const context = childSession.getContextUsage();
-    if (
-      typeof context?.tokens === "number" &&
-      Number.isFinite(context.tokens) &&
-      context.tokens >= 0
-    ) {
-      usage.contextTokens = context.tokens;
-    }
+    usage = withCurrentContextTokens(usage, context?.tokens);
     if (
       typeof context?.contextWindow === "number" &&
       Number.isFinite(context.contextWindow) &&
@@ -523,15 +646,31 @@ export async function runAgent(
         modelId = reportedModel.id;
         contextWindow = reportedModel.contextWindow;
       }
-      if (msg.stopReason) stopReason = msg.stopReason;
-      if (msg.errorMessage) errorMessage = msg.errorMessage;
       break;
     }
+    ({ stopReason, errorMessage: assistantErrorMessage } =
+      latestAssistantStatus(messages));
   };
 
-  let markFirstResponse = () => {};
+  let markResponse = () => {};
+  let markRequest = () => {};
+  let markCompactionStart = (_reason?: string) => {};
+  let markCompactionEnd = () => {};
   const unsubscribe = childSession.subscribe((event) => {
-    if (isAssistantResponseEvent(event)) markFirstResponse();
+    if (event.type === "turn_start") markRequest();
+    if (isAssistantResponseEvent(event)) markResponse();
+    if (event.type === "compaction_start") {
+      markCompactionStart(event.reason);
+    } else if (event.type === "compaction_end") {
+      markCompactionEnd();
+    }
+    if (event.type === "compaction_end") {
+      if (event.errorMessage !== undefined) {
+        compactionErrorMessage = errorText(event.errorMessage);
+      } else if (event.result !== undefined && !event.aborted) {
+        compactionErrorMessage = undefined;
+      }
+    }
     if (
       event.type === "tool_execution_start" ||
       event.type === "tool_execution_end"
@@ -555,9 +694,23 @@ export async function runAgent(
 
   let aborted = false;
   let abortPromise: Promise<void> | undefined;
-  const onAbort = () => {
+  const abortChildSession = async () => {
+    try {
+      childSession.abortCompaction();
+    } finally {
+      await childSession.abort();
+    }
+  };
+  const abortSession = () => {
+    abortPromise ??= abortChildSession().catch(() => {});
+    return abortPromise;
+  };
+  const requestAbort = () => {
     aborted = true;
-    abortPromise ??= childSession.abort().catch(() => {});
+    return abortSession();
+  };
+  const onAbort = () => {
+    void requestAbort();
   };
   if (options.signal) {
     if (options.signal.aborted) onAbort();
@@ -565,39 +718,56 @@ export async function runAgent(
   }
 
   let output = "";
+  let fullOutput: string | undefined;
   let transcript: TranscriptEntry[] = [];
   try {
     if (!aborted) {
-      const watchdog = createFirstResponseWatchdog(() => childSession.abort(), {
-        timeoutMs: options.firstResponseTimeoutMs,
-        model: modelId,
-      });
-      markFirstResponse = watchdog.markResponse;
-      await watchdog.waitFor(
-        childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
+      const responseWatchdog = createFirstResponseWatchdog(
+        () => abortSession(),
+        {
+          timeoutMs: options.firstResponseTimeoutMs,
+          model: modelId,
+        },
+      );
+      const compactionWatchdog = createCompactionWatchdog(
+        () => abortSession(),
+        {
+          timeoutMs: options.compactionTimeoutMs,
+          model: modelId,
+        },
+      );
+      markResponse = responseWatchdog.markResponse;
+      markRequest = responseWatchdog.markRequest;
+      markCompactionStart = compactionWatchdog.markStart;
+      markCompactionEnd = compactionWatchdog.markEnd;
+      await responseWatchdog.waitFor(
+        compactionWatchdog.waitFor(
+          childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
+        ),
       );
     }
   } catch (error) {
-    errorMessage = errorMessage ?? errorText(error);
-    stopReason = stopReason ?? "error";
+    runErrorMessage = errorText(error);
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     if (abortPromise) await abortPromise;
     unsubscribe();
     unsubscribeToolTimeout?.();
     sync();
-    output = truncateUtf8(
+    ({ output, fullOutput } = boundAgentOutput(
       finalOutput(childSession.messages),
-      AGENT_OUTPUT_MAX_BYTES,
-    );
+    ));
     transcript = transcriptFromMessages(childSession.messages, toolTimings);
     await shutdownAndDisposeChildSession(childSession);
   }
 
-  if (aborted || stopReason === "aborted") {
+  const explicitFailure =
+    compactionErrorMessage ?? runErrorMessage ?? assistantErrorMessage;
+  if (aborted || (stopReason === "aborted" && explicitFailure === undefined)) {
     return {
       ok: false,
       output,
+      ...(fullOutput === undefined ? {} : { fullOutput }),
       structured,
       error: "Agent was aborted",
       aborted: true,
@@ -608,13 +778,14 @@ export async function runAgent(
     };
   }
 
-  const failed = stopReason === "error" || errorMessage !== undefined;
-  if (failed) {
+  const failure = classifyAgentFailure(stopReason, explicitFailure);
+  if (failure !== undefined) {
     return {
       ok: false,
       output,
+      ...(fullOutput === undefined ? {} : { fullOutput }),
       structured,
-      error: errorMessage ?? "Agent failed",
+      error: failure,
       aborted: false,
       usage,
       model: modelId,
@@ -627,6 +798,7 @@ export async function runAgent(
     return {
       ok: false,
       output,
+      ...(fullOutput === undefined ? {} : { fullOutput }),
       error:
         "Agent finished without calling structured_output; no structured result matching the schema was produced.",
       aborted: false,
@@ -640,6 +812,7 @@ export async function runAgent(
   return {
     ok: true,
     output,
+    ...(fullOutput === undefined ? {} : { fullOutput }),
     structured,
     aborted: false,
     usage,

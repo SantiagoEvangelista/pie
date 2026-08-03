@@ -87,6 +87,20 @@ function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
 }
 
+/** Persist final child text outside bounded model/result transport. */
+export function persistAgentOutput(
+  runDir: string,
+  agentIndex: number,
+  output: string,
+) {
+  if (!Number.isSafeInteger(agentIndex) || agentIndex < 1) {
+    throw new Error("agent output artifact requires a positive integer index");
+  }
+  const name = `agent-${agentIndex}-output.txt`;
+  writeRunFile(runDir, name, output);
+  return name;
+}
+
 export function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
   const transcripts = Object.fromEntries(
     details.agents.map((agent) => [
