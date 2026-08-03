@@ -384,14 +384,18 @@ const inertKeybindings = { matches: () => false };
 test("textbox supports Shift+Arrow and always-on mouse selection", () => {
   const keyboardTui = new TUI(new CaptureTerminal());
   const keyboardEditor = new MouseSelectionEditor(keyboardTui, editorTheme, inertKeybindings, () => {});
+  keyboardTui.setFocus(keyboardEditor);
   keyboardEditor.setText("hello");
   keyboardEditor.handleInput("\x1b[1;2D");
-  assert.match(keyboardEditor.render(30).join("\n"), /\x1b\[7m/);
+  const keyboardSelection = keyboardEditor.render(30).join("\n");
+  assert.match(keyboardSelection, /\x1b\[7m/);
+  assert.doesNotMatch(keyboardSelection, /\x1b\[7m {2,}/);
   keyboardEditor.handleInput("X");
   assert.equal(keyboardEditor.getText(), "hellX");
 
   const mouseTui = new TUI(new CaptureTerminal());
   const mouseEditor = new MouseSelectionEditor(mouseTui, editorTheme, inertKeybindings, () => {});
+  mouseTui.setFocus(mouseEditor);
   mouseEditor.setText("hello");
   mouseEditor.render(30);
   mouseTui.hardwareCursorRow = mouseEditor.lastCursorRenderRow;

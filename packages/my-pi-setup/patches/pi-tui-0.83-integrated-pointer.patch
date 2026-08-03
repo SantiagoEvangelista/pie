@@ -8,7 +8,7 @@
  import * as fs from "node:fs";
  import * as os from "node:os";
  import * as path from "node:path";
-@@ -8,8 +9,179 @@
+@@ -8,8 +9,181 @@
  import { isKeyRelease, matchesKey } from "./keys.js";
  import { isOsc11BackgroundColorResponse, parseOsc11BackgroundColor, parseTerminalColorSchemeReport, } from "./terminal-colors.js";
  import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
@@ -112,6 +112,8 @@
 +    const paddingStarts = new Map(generatedPadding.map((entry) => [entry.row, entry.startColumn]));
 +    const linkSpans = [];
 +    for (let row = 0; row < lines.length; row++) {
++        if (!transcriptRowSet.has(row) || !lines[row].includes("\x1b]8;"))
++            continue;
 +        let activeHref = null;
 +        const line = lines[row];
 +        const rowLimit = paddingStarts.get(row) ?? Number.POSITIVE_INFINITY;
@@ -189,7 +191,7 @@
  function parseKittyImageHeader(line) {
      const sequenceStart = line.indexOf(KITTY_SEQUENCE_PREFIX);
      if (sequenceStart === -1)
-@@ -178,10 +350,21 @@
+@@ -178,10 +352,21 @@
              this.scrollTop = Math.max(0, Math.min(this.maxScrollTop, this.scrollTop));
          }
          const visibleContent = contentLines.slice(this.scrollTop, this.scrollTop + this.viewportHeight);
@@ -214,7 +216,7 @@
      }
  }
  /**
-@@ -217,6 +400,11 @@
+@@ -217,6 +402,11 @@
      mouseTracking = false;
      mouseMotionTracking = false;
      mouseTrackingActive = false;
@@ -226,7 +228,7 @@
      logDirectory;
      // Overlay stack for modal components rendered on top of base content
      focusOrderCounter = 0;
-@@ -273,6 +461,55 @@
+@@ -273,6 +463,55 @@
              return;
          this.terminal.write(enabled ? "\x1b[?1000l\x1b[?1002h" : "\x1b[?1002l\x1b[?1000h");
      }
@@ -282,7 +284,7 @@
      setFocus(component) {
          this.setFocusInternal({ component, overlayFocusRestore: "clear" });
      }
-@@ -583,6 +820,10 @@
+@@ -583,6 +822,10 @@
      }
      stop() {
          this.stopped = true;
@@ -293,7 +295,7 @@
          if (this.renderTimer) {
              clearTimeout(this.renderTimer);
              this.renderTimer = undefined;
-@@ -619,6 +860,10 @@
+@@ -619,6 +862,10 @@
      }
      requestRender(force = false) {
          if (force) {
@@ -304,7 +306,7 @@
              this.previousLines = [];
              this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
              this.previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
-@@ -970,7 +1215,57 @@
+@@ -970,7 +1217,57 @@
              }
          }
          return lines;
@@ -321,12 +323,12 @@
 +            linkSpans,
 +        };
 +        const signature = frameSnapshotSignature(candidate);
-+        if (!this.committedFrame || signature !== this.frameSignature) {
-+            this.frameRevision += 1;
-+            this.frameHighlightRevision = null;
-+            this.frameHighlights = [];
-+            this.frameSignature = signature;
-+        }
++        if (this.committedFrame && signature === this.frameSignature)
++            return;
++        this.frameRevision += 1;
++        this.frameHighlightRevision = null;
++        this.frameHighlights = [];
++        this.frameSignature = signature;
 +        this.committedFrame = cloneFrameSnapshot({ ...candidate, revision: this.frameRevision });
      }
 +    applyFrameHighlights(lines) {
@@ -362,7 +364,7 @@
      collectKittyImageIds(lines) {
          const ids = new Set();
          for (const line of lines) {
-@@ -1113,12 +1408,19 @@
+@@ -1113,12 +1410,19 @@
          };
          // Render all components to get new lines
          let newLines = this.render(width);

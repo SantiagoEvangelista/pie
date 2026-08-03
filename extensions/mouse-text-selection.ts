@@ -133,23 +133,37 @@ function highlightColumns(line: string, start: number, end: number): string {
 	if (end <= start) return line;
 	const markerIndex = line.indexOf(CURSOR_MARKER);
 	const markerColumn = markerIndex >= 0 ? visibleWidth(line.slice(0, markerIndex)) : undefined;
-	const text = markerIndex >= 0
+	let text = markerIndex >= 0
 		? line.slice(0, markerIndex) + line.slice(markerIndex + CURSOR_MARKER.length)
 		: line;
+	// Base editor draws a fake inverse cursor immediately after marker. Selection
+	// supplies its own inverse range; retaining both makes ANSI slicing carry the
+	// cursor style across all right-side padding.
+	if (markerIndex >= 0 && text.startsWith(SELECT_START, markerIndex)) {
+		text = text.slice(0, markerIndex) + text.slice(markerIndex + SELECT_START.length);
+	}
 	const width = visibleWidth(text);
-	const before = sliceByColumn(text, 0, start, true);
-	const selected = sliceByColumn(text, start, end - start, true).replaceAll(
+	let before = sliceByColumn(text, 0, start, true);
+	let selected = sliceByColumn(text, start, end - start, true).replaceAll(
 		"\x1b[0m",
 		`\x1b[0m${SELECT_START}`,
 	);
-	const after = sliceByColumn(text, end, Math.max(0, width - end), true);
-	const highlighted = `${before}${SELECT_START}${selected}${SELECT_END}${after}`;
-	if (markerColumn === undefined) return highlighted;
-	return (
-		sliceByColumn(highlighted, 0, markerColumn, true) +
-		CURSOR_MARKER +
-		sliceByColumn(highlighted, markerColumn, Math.max(0, width - markerColumn), true)
-	);
+	let after = sliceByColumn(text, end, Math.max(0, width - end), true);
+	if (markerColumn !== undefined) {
+		const insertMarker = (segment: string, column: number): string => {
+			const segmentWidth = visibleWidth(segment);
+			const offset = Math.max(0, Math.min(segmentWidth, column));
+			return (
+				sliceByColumn(segment, 0, offset, true) +
+				CURSOR_MARKER +
+				sliceByColumn(segment, offset, segmentWidth - offset, true)
+			);
+		};
+		if (markerColumn <= start) before = insertMarker(before, markerColumn);
+		else if (markerColumn < end) selected = insertMarker(selected, markerColumn - start);
+		else after = insertMarker(after, markerColumn - end);
+	}
+	return `${before}${SELECT_START}${selected}${SELECT_END}${after}${SELECT_END}`;
 }
 
 function isPrimary(event: MouseEvent): boolean {
@@ -718,7 +732,6 @@ export class MouseSelectionEditor extends CustomEditor {
 	}
 
 	render(width: number): string[] {
-		this.reconcilePointerSelection();
 		const lines = super.render(width);
 		const cursorRow = lines.findIndex((line) => line.includes(CURSOR_MARKER));
 		if (cursorRow >= 0) this.lastCursorRenderRow = cursorRow;
