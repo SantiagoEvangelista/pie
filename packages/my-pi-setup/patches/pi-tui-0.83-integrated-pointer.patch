@@ -1,0 +1,509 @@
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -1,6 +1,7 @@
+ /**
+  * Minimal TUI implementation with differential rendering
+  */
++import { randomBytes } from "node:crypto";
+ import * as fs from "node:fs";
+ import * as os from "node:os";
+ import * as path from "node:path";
+@@ -8,8 +9,179 @@
+ import { isKeyRelease, matchesKey } from "./keys.js";
+ import { isOsc11BackgroundColorResponse, parseOsc11BackgroundColor, parseTerminalColorSchemeReport, } from "./terminal-colors.js";
+ import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
+-import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
++import { extractAnsiCode, extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
+ const KITTY_SEQUENCE_PREFIX = "\x1b_G";
++const FRAME_ANNOTATION_NONCE = randomBytes(16).toString("hex");
++const FRAME_ANNOTATION_PATTERN = /\x1b_pi:f:([^:]+):(row|padding):([^\x07]*)\x07/g;
++const FRAME_INVERSE_ON = "\x1b[7m";
++const FRAME_INVERSE_OFF = "\x1b[27m";
++const FRAME_SGR_PATTERN = /\x1b\[[0-?]*[ -/]*m/g;
++const frameGraphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
++function frameAnnotation(kind, payload) {
++    return `\x1b_pi:f:${FRAME_ANNOTATION_NONCE}:${kind}:${payload}\x07`;
++}
++function stripFrameAnnotations(lines) {
++    const transcriptRows = [];
++    const generatedPadding = [];
++    const cleanLines = lines.map((line, row) => line.replace(FRAME_ANNOTATION_PATTERN, (_annotation, nonce, kind, payload) => {
++        if (nonce !== FRAME_ANNOTATION_NONCE)
++            return "";
++        if (kind === "row") {
++            const sourceRow = Number(payload);
++            if (Number.isSafeInteger(sourceRow) && sourceRow >= 0) {
++                transcriptRows.push({ row, sourceRow });
++            }
++        }
++        else {
++            const [startText, endText] = payload.split(":", 2);
++            const startColumn = Number(startText);
++            const endColumn = Number(endText);
++            if (Number.isSafeInteger(startColumn) && Number.isSafeInteger(endColumn) && startColumn >= 0 && endColumn >= startColumn) {
++                generatedPadding.push({ row, startColumn, endColumn });
++            }
++        }
++        return "";
++    }));
++    return { lines: cleanLines, transcriptRows, generatedPadding };
++}
++function parseOsc8Href(code) {
++    if (!code.startsWith("\x1b]8;"))
++        return undefined;
++    let bodyEnd = -1;
++    if (code.endsWith("\x07")) {
++        bodyEnd = code.length - 1;
++    }
++    else if (code.endsWith("\x1b\\")) {
++        bodyEnd = code.length - 2;
++    }
++    if (bodyEnd < 0)
++        return undefined;
++    const body = code.slice(4, bodyEnd);
++    const separator = body.indexOf(";");
++    if (separator < 0)
++        return undefined;
++    return body.slice(separator + 1) || null;
++}
++function isExplicitHttpHref(href) {
++    if (/[\u0000-\u001f\u007f-\u009f]/u.test(href) || /%(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f])/iu.test(href)) {
++        return false;
++    }
++    try {
++        const parsed = new URL(href);
++        return ((parsed.protocol === "http:" || parsed.protocol === "https:") &&
++            parsed.hostname.length > 0 &&
++            parsed.username.length === 0 &&
++            parsed.password.length === 0);
++    }
++    catch {
++        return false;
++    }
++}
++function snapFrameRangeToCells(line, requestedStart, requestedEnd) {
++    let startColumn = requestedStart;
++    let endColumn = requestedEnd;
++    let column = 0;
++    let index = 0;
++    while (index < line.length) {
++        const ansi = extractAnsiCode(line, index);
++        if (ansi) {
++            index += ansi.length;
++            continue;
++        }
++        let textEnd = index;
++        while (textEnd < line.length && !extractAnsiCode(line, textEnd))
++            textEnd++;
++        for (const { segment } of frameGraphemeSegmenter.segment(line.slice(index, textEnd))) {
++            const nextColumn = column + visibleWidth(segment);
++            if (startColumn > column && startColumn < nextColumn)
++                startColumn = column;
++            if (endColumn > column && endColumn < nextColumn)
++                endColumn = nextColumn;
++            column = nextColumn;
++        }
++        index = textEnd;
++    }
++    return { startColumn, endColumn };
++}
++function collectFrameLinkSpans(lines, transcriptRows, generatedPadding) {
++    const transcriptRowSet = new Set(transcriptRows.map((entry) => entry.row));
++    const paddingStarts = new Map(generatedPadding.map((entry) => [entry.row, entry.startColumn]));
++    const linkSpans = [];
++    for (let row = 0; row < lines.length; row++) {
++        let activeHref = null;
++        const line = lines[row];
++        const rowLimit = paddingStarts.get(row) ?? Number.POSITIVE_INFINITY;
++        let column = 0;
++        let index = 0;
++        let currentSpan = null;
++        const closeSpan = () => {
++            if (currentSpan && currentSpan.endColumn > currentSpan.startColumn) {
++                linkSpans.push(currentSpan);
++            }
++            currentSpan = null;
++        };
++        while (index < line.length) {
++            const ansi = extractAnsiCode(line, index);
++            if (ansi) {
++                const href = parseOsc8Href(ansi.code);
++                if (href !== undefined) {
++                    closeSpan();
++                    activeHref = href && isExplicitHttpHref(href) ? href : null;
++                }
++                index += ansi.length;
++                continue;
++            }
++            let textEnd = index;
++            while (textEnd < line.length && !extractAnsiCode(line, textEnd))
++                textEnd++;
++            for (const { segment } of frameGraphemeSegmenter.segment(line.slice(index, textEnd))) {
++                const segmentWidth = visibleWidth(segment);
++                const segmentEnd = column + segmentWidth;
++                if (activeHref && transcriptRowSet.has(row) && column < rowLimit && segmentWidth > 0) {
++                    const clippedEnd = Math.min(segmentEnd, rowLimit);
++                    if (!currentSpan || currentSpan.href !== activeHref || currentSpan.endColumn !== column) {
++                        closeSpan();
++                        currentSpan = { row, startColumn: column, endColumn: clippedEnd, href: activeHref };
++                    }
++                    else {
++                        currentSpan.endColumn = clippedEnd;
++                    }
++                }
++                else {
++                    closeSpan();
++                }
++                column = segmentEnd;
++            }
++            index = textEnd;
++        }
++        closeSpan();
++    }
++    return linkSpans;
++}
++function frameSnapshotSignature(frame) {
++    return JSON.stringify([
++        frame.lines,
++        frame.viewportTop,
++        frame.width,
++        frame.height,
++        frame.transcriptRows,
++        frame.generatedPadding,
++        frame.linkSpans,
++    ]);
++}
++function cloneFrameSnapshot(frame) {
++    return Object.freeze({
++        revision: frame.revision,
++        lines: Object.freeze([...frame.lines]),
++        viewportTop: frame.viewportTop,
++        viewportBottom: frame.viewportBottom,
++        width: frame.width,
++        height: frame.height,
++        transcriptRows: Object.freeze(frame.transcriptRows.map((entry) => Object.freeze({ ...entry }))),
++        generatedPadding: Object.freeze(frame.generatedPadding.map((entry) => Object.freeze({ ...entry }))),
++        linkSpans: Object.freeze(frame.linkSpans.map((entry) => Object.freeze({ ...entry }))),
++    });
++}
+ function parseKittyImageHeader(line) {
+     const sequenceStart = line.indexOf(KITTY_SEQUENCE_PREFIX);
+     if (sequenceStart === -1)
+@@ -178,10 +350,21 @@
+             this.scrollTop = Math.max(0, Math.min(this.maxScrollTop, this.scrollTop));
+         }
+         const visibleContent = contentLines.slice(this.scrollTop, this.scrollTop + this.viewportHeight);
+-        while (visibleContent.length < this.viewportHeight) {
+-            visibleContent.push("");
++        const annotatedContent = visibleContent.map((line, index) => {
++            const lineWidth = visibleWidth(line);
++            const rowAnnotation = frameAnnotation("row", String(this.scrollTop + index));
++            if (lineWidth >= width) {
++                return rowAnnotation + line;
++            }
++            return (rowAnnotation +
++                line +
++                frameAnnotation("padding", `${lineWidth}:${width}`) +
++                " ".repeat(width - lineWidth));
++        });
++        while (annotatedContent.length < this.viewportHeight) {
++            annotatedContent.push("");
+         }
+-        return [...visibleContent, ...visibleBottom];
++        return [...annotatedContent, ...visibleBottom];
+     }
+ }
+ /**
+@@ -217,6 +400,11 @@
+     mouseTracking = false;
+     mouseMotionTracking = false;
+     mouseTrackingActive = false;
++    committedFrame = null;
++    frameRevision = 0;
++    frameSignature = "";
++    frameHighlights = [];
++    frameHighlightRevision = null;
+     logDirectory;
+     // Overlay stack for modal components rendered on top of base content
+     focusOrderCounter = 0;
+@@ -273,6 +461,55 @@
+             return;
+         this.terminal.write(enabled ? "\x1b[?1000l\x1b[?1002h" : "\x1b[?1002l\x1b[?1000h");
+     }
++    /** Return a defensive copy of the last frame committed to terminal rendering. */
++    getFrameSnapshot() {
++        return this.committedFrame ? cloneFrameSnapshot(this.committedFrame) : null;
++    }
++    /** Apply generic inverse-video decorations to display-cell ranges in one source revision. */
++    setFrameHighlights(revision, ranges) {
++        if (!this.committedFrame || revision !== this.committedFrame.revision || !Array.isArray(ranges)) {
++            return false;
++        }
++        const normalized = [];
++        for (const range of ranges) {
++            if (!range || !Number.isSafeInteger(range.row) || !Number.isSafeInteger(range.startColumn) ||
++                !Number.isSafeInteger(range.endColumn) || range.row < 0 || range.row >= this.committedFrame.lines.length) {
++                continue;
++            }
++            const lineWidth = visibleWidth(this.committedFrame.lines[range.row]);
++            const clampedStart = Math.max(0, Math.min(lineWidth, range.startColumn));
++            const clampedEnd = Math.max(clampedStart, Math.min(lineWidth, range.endColumn));
++            const { startColumn, endColumn } = snapFrameRangeToCells(this.committedFrame.lines[range.row], clampedStart, clampedEnd);
++            if (endColumn > startColumn) {
++                normalized.push({ row: range.row, startColumn, endColumn });
++            }
++        }
++        normalized.sort((a, b) => a.row - b.row || a.startColumn - b.startColumn || a.endColumn - b.endColumn);
++        const merged = [];
++        for (const range of normalized) {
++            const previous = merged.at(-1);
++            if (previous && previous.row === range.row && range.startColumn <= previous.endColumn) {
++                previous.endColumn = Math.max(previous.endColumn, range.endColumn);
++            }
++            else {
++                merged.push({ ...range });
++            }
++        }
++        if (this.frameHighlightRevision === revision && JSON.stringify(this.frameHighlights) === JSON.stringify(merged)) {
++            return true;
++        }
++        this.frameHighlightRevision = revision;
++        this.frameHighlights = merged;
++        this.requestRender();
++        return true;
++    }
++    clearFrameHighlights() {
++        if (this.frameHighlightRevision === null && this.frameHighlights.length === 0)
++            return;
++        this.frameHighlightRevision = null;
++        this.frameHighlights = [];
++        this.requestRender();
++    }
+     setFocus(component) {
+         this.setFocusInternal({ component, overlayFocusRestore: "clear" });
+     }
+@@ -583,6 +820,10 @@
+     }
+     stop() {
+         this.stopped = true;
++        this.committedFrame = null;
++        this.frameSignature = "";
++        this.frameHighlightRevision = null;
++        this.frameHighlights = [];
+         if (this.renderTimer) {
+             clearTimeout(this.renderTimer);
+             this.renderTimer = undefined;
+@@ -619,6 +860,10 @@
+     }
+     requestRender(force = false) {
+         if (force) {
++            this.committedFrame = null;
++            this.frameSignature = "";
++            this.frameHighlightRevision = null;
++            this.frameHighlights = [];
+             this.previousLines = [];
+             this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
+             this.previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
+@@ -970,7 +1215,57 @@
+             }
+         }
+         return lines;
++    }
++    commitFrame(lines, width, height, transcriptRows, generatedPadding, linkSpans) {
++        const candidate = {
++            lines,
++            viewportTop: Math.max(0, lines.length - height),
++            viewportBottom: Math.max(0, lines.length - height) + height,
++            width,
++            height,
++            transcriptRows,
++            generatedPadding,
++            linkSpans,
++        };
++        const signature = frameSnapshotSignature(candidate);
++        if (!this.committedFrame || signature !== this.frameSignature) {
++            this.frameRevision += 1;
++            this.frameHighlightRevision = null;
++            this.frameHighlights = [];
++            this.frameSignature = signature;
++        }
++        this.committedFrame = cloneFrameSnapshot({ ...candidate, revision: this.frameRevision });
+     }
++    applyFrameHighlights(lines) {
++        if (!this.committedFrame || this.frameHighlightRevision !== this.committedFrame.revision || this.frameHighlights.length === 0) {
++            return [...lines];
++        }
++        const rangesByRow = new Map();
++        for (const range of this.frameHighlights) {
++            const rowRanges = rangesByRow.get(range.row);
++            if (rowRanges)
++                rowRanges.push(range);
++            else
++                rangesByRow.set(range.row, [range]);
++        }
++        return lines.map((line, row) => {
++            const ranges = rangesByRow.get(row);
++            if (!ranges || ranges.length === 0 || isImageLine(line))
++                return line;
++            const lineWidth = visibleWidth(line);
++            let result = "";
++            let column = 0;
++            for (const range of ranges) {
++                result += sliceByColumn(line, column, range.startColumn - column);
++                let selected = sliceByColumn(line, range.startColumn, range.endColumn - range.startColumn);
++                selected = selected.replace(FRAME_SGR_PATTERN, (code) => code + FRAME_INVERSE_ON);
++                result += FRAME_INVERSE_ON + selected + FRAME_INVERSE_OFF;
++                column = range.endColumn;
++            }
++            result += sliceByColumn(line, column, Math.max(0, lineWidth - column));
++            return result;
++        });
++    }
+     collectKittyImageIds(lines) {
+         const ids = new Set();
+         for (const line of lines) {
+@@ -1113,12 +1408,19 @@
+         };
+         // Render all components to get new lines
+         let newLines = this.render(width);
++        const frameMetadata = stripFrameAnnotations(newLines);
++        newLines = frameMetadata.lines;
+         // Composite overlays into the rendered lines (before differential compare)
+         if (this.overlayStack.length > 0) {
+             newLines = this.compositeOverlays(newLines, width, height);
++            newLines = stripFrameAnnotations(newLines).lines;
+         }
+         // Extract cursor position before applying line resets (marker must be found first)
+         const cursorPos = this.extractCursorPosition(newLines, height);
++        newLines = newLines.map((line) => isImageLine(line) ? line : normalizeTerminalOutput(line));
++        const linkSpans = collectFrameLinkSpans(newLines, frameMetadata.transcriptRows, frameMetadata.generatedPadding);
++        this.commitFrame(newLines, width, height, frameMetadata.transcriptRows, frameMetadata.generatedPadding, linkSpans);
++        newLines = this.applyFrameHighlights(newLines);
+         newLines = this.applyLineResets(newLines);
+         // Helper to clear scrollback and viewport and render all new lines
+         const fullRender = (clear) => {
+--- a/dist/tui.d.ts
++++ b/dist/tui.d.ts
+@@ -34,6 +34,38 @@
+     data?: string;
+ } | undefined;
+ type InputListener = (data: string) => InputListenerResult;
++export interface FrameTranscriptRow {
++    readonly row: number;
++    readonly sourceRow: number;
++}
++export interface FrameGeneratedPadding {
++    readonly row: number;
++    readonly startColumn: number;
++    readonly endColumn: number;
++}
++export interface FrameLinkSpan {
++    readonly row: number;
++    readonly startColumn: number;
++    readonly endColumn: number;
++    readonly href: string;
++}
++export interface FrameHighlightRange {
++    readonly row: number;
++    readonly startColumn: number;
++    readonly endColumn: number;
++}
++/** Defensive, unhighlighted view of one committed terminal source frame. */
++export interface FrameSnapshot {
++    readonly revision: number;
++    readonly lines: readonly string[];
++    readonly viewportTop: number;
++    readonly viewportBottom: number;
++    readonly width: number;
++    readonly height: number;
++    readonly transcriptRows: readonly FrameTranscriptRow[];
++    readonly generatedPadding: readonly FrameGeneratedPadding[];
++    readonly linkSpans: readonly FrameLinkSpan[];
++}
+ /**
+  * Interface for components that can receive focus and display a hardware cursor.
+  * When focused, the component should emit CURSOR_MARKER at the cursor position
+@@ -191,6 +223,11 @@
+     private mouseTracking;
+     private mouseMotionTracking;
+     private mouseTrackingActive;
++    private committedFrame;
++    private frameRevision;
++    private frameSignature;
++    private frameHighlights;
++    private frameHighlightRevision;
+     private readonly logDirectory;
+     private focusOrderCounter;
+     private overlayStack;
+@@ -212,6 +249,11 @@
+     setMouseTracking(enabled: boolean): void;
+     /** Temporarily switch mouse reporting between normal and button-motion modes. */
+     setMouseMotionTracking(enabled: boolean): void;
++    /** Return a defensive copy of the last frame committed to terminal rendering. */
++    getFrameSnapshot(): FrameSnapshot | null;
++    /** Apply generic inverse-video decorations to display-cell ranges in one source revision. */
++    setFrameHighlights(revision: number, ranges: readonly FrameHighlightRange[]): boolean;
++    clearFrameHighlights(): void;
+     setFocus(component: Component | null): void;
+     private setFocusInternal;
+     private clearOverlayFocusRestore;
+@@ -260,6 +302,8 @@
+     private compositeOverlays;
+     private static readonly SEGMENT_RESET;
+     private applyLineResets;
++    private commitFrame;
++    private applyFrameHighlights;
+     private collectKittyImageIds;
+     private deleteKittyImages;
+     private getKittyImageReservedRows;
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -19,6 +19,6 @@
+ export { ProcessTerminal, type Terminal } from "./terminal.ts";
+ export { parseOsc11BackgroundColor, parseTerminalColorSchemeReport, type RgbColor, type TerminalColorScheme, } from "./terminal-colors.ts";
+ export { allocateImageId, type CellDimensions, calculateImageRows, deleteAllKittyImages, deleteKittyImage, detectCapabilities, encodeITerm2, encodeKitty, getCapabilities, getCellDimensions, getGifDimensions, getImageDimensions, getJpegDimensions, getPngDimensions, getWebpDimensions, hyperlink, type ImageDimensions, type ImageProtocol, type ImageRenderOptions, imageFallback, renderImage, resetCapabilitiesCache, setCapabilities, setCellDimensions, type TerminalCapabilities, } from "./terminal-image.ts";
+-export { type Component, Container, CURSOR_MARKER, FixedBottomContainer, type FixedBottomScrollState, type Focusable, isFocusable, type OverlayAnchor, type OverlayHandle, type OverlayMargin, type OverlayOptions, type OverlayUnfocusOptions, type SizeValue, TUI, } from "./tui.ts";
++export { type Component, Container, CURSOR_MARKER, type FrameGeneratedPadding, type FrameHighlightRange, type FrameLinkSpan, type FrameSnapshot, type FrameTranscriptRow, FixedBottomContainer, type FixedBottomScrollState, type Focusable, isFocusable, type OverlayAnchor, type OverlayHandle, type OverlayMargin, type OverlayOptions, type OverlayUnfocusOptions, type SizeValue, TUI, } from "./tui.ts";
+ export { sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.ts";
+ //# sourceMappingURL=index.d.ts.map
+--- a/dist/components/markdown.js
++++ b/dist/components/markdown.js
+@@ -43,6 +43,21 @@
+ markdownParser.setOptions({
+     tokenizer: new StrictStrikethroughTokenizer(),
+ });
++function safeHttpHyperlinkTarget(href) {
++    if (/[\u0000-\u001f\u007f-\u009f]/u.test(href) || /%(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f])/iu.test(href)) {
++        return undefined;
++    }
++    try {
++        const parsed = new URL(href);
++        if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname || parsed.username || parsed.password) {
++            return undefined;
++        }
++        return parsed.href;
++    }
++    catch {
++        return undefined;
++    }
++}
+ export class Markdown {
+     text;
+     paddingX; // Left/right padding
+@@ -413,11 +428,14 @@
+                         // For mailto: links strip the prefix (autolinked emails use text="foo@bar.com"
+                         // but href="mailto:foo@bar.com").
+                         const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
++                        const semanticHref = safeHttpHyperlinkTarget(token.href);
+                         if (token.text === token.href || token.text === hrefForComparison) {
+-                            result += styledLink + stylePrefix;
++                            result += (semanticHref ? hyperlink(styledLink, semanticHref) : styledLink) + stylePrefix;
+                         }
+                         else {
+-                            result += styledLink + this.theme.linkUrl(` (${token.href})`) + stylePrefix;
++                            const fallbackLink = styledLink + this.theme.linkUrl(` (${token.href})`);
++                            // Keep semantic HTTP(S) metadata for Pi-owned clicks even when terminal lacks OSC-8 support.
++                            result += (semanticHref ? hyperlink(fallbackLink, semanticHref) : fallbackLink) + stylePrefix;
+                         }
+                     }
+                     break;

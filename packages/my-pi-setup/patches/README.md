@@ -15,6 +15,13 @@ scrollback while Pi runs and restores it on exit or suspend.
 install in place; clean installs receive the same change from the consolidated
 pinned-layout patch.
 
+`pi-tui-0.83-integrated-pointer.patch` owns Pi-TUI frame interaction runtime:
+defensive revisioned source snapshots, transcript-row and generated-padding
+metadata, visible HTTP/HTTPS OSC-8 spans, stale-safe generic cell highlights,
+and annotation removal before terminal writes. Apply it after pinned-layout and
+mouse-ownership patches. Pointer policy, clipboard writes, and URL opening stay
+extension-owned; Pi-TUI performs no opener or clipboard side effects.
+
 `pi-tui-0.83-footer-navigation-{editor-js,editor-dts,interface-dts}.patch`
 expose the editor's safe lower-boundary state so custom editor wrappers can
 transfer Down focus without intercepting multiline movement, history browsing,
@@ -75,6 +82,12 @@ Pi updates overwrite the global runtime file. Reapply with:
 ```sh
 ~/.pi/agent/packages/my-pi-setup/scripts/apply-pi-inline-compaction.sh
 ```
+
+Apply script requires both Pi and Pi-TUI exactly `0.83.0`. Integrated-pointer
+install skips only when all JS/declaration sentinels exist, refuses partial
+sentinel sets, and dry-runs patch before mutation so version or hunk drift fails
+closed. Reinstall clean 0.83.0 packages before retrying partial installs; do not
+reorder integrated-pointer ahead of pinned-layout/mouse-ownership.
 
 The apply script also launch-checks bundled macOS `exec_bridge` and locally
 re-signs it when package restoration leaves a signature that taskgated rejects.

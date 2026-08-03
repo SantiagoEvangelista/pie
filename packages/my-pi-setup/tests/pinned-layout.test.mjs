@@ -22,6 +22,15 @@ const { Editor, FixedBottomContainer, TUI } = await import(
 );
 
 const identity = (text) => text;
+const frameAnnotationPattern = /\x1b_pi:f:[^:]+:(row|padding):([^\x07]*)\x07/g;
+const layoutText = (lines) => lines.map((line) => {
+  let paddingStart;
+  const clean = line.replace(frameAnnotationPattern, (_annotation, kind, payload) => {
+    if (kind === "padding") paddingStart = Number(payload.split(":", 1)[0]);
+    return "";
+  });
+  return paddingStart === undefined ? clean : clean.slice(0, paddingStart);
+});
 const editorTheme = {
   borderColor: identity,
   selectList: {
@@ -88,7 +97,7 @@ test("fixed layout pins bottom rows and scrolls only content", () => {
     renderRequests += 1;
   });
 
-  assert.deepEqual(layout.render(80), ["content-6", "content-7", "content-8", "content-9", "editor", "footer"]);
+  assert.deepEqual(layoutText(layout.render(80)), ["content-6", "content-7", "content-8", "content-9", "editor", "footer"]);
   assert.deepEqual(layout.getScrollState(), {
     scrollTop: 6,
     maxScrollTop: 6,
@@ -97,10 +106,10 @@ test("fixed layout pins bottom rows and scrolls only content", () => {
   });
 
   assert.equal(layout.scrollPage(-1), true);
-  assert.deepEqual(layout.render(80), ["content-4", "content-5", "content-6", "content-7", "editor", "footer"]);
+  assert.deepEqual(layoutText(layout.render(80)), ["content-4", "content-5", "content-6", "content-7", "editor", "footer"]);
   assert.equal(layout.getScrollState().followBottom, false);
   assert.equal(layout.scrollToTop(), true);
-  assert.deepEqual(layout.render(80), ["content-0", "content-1", "content-2", "content-3", "editor", "footer"]);
+  assert.deepEqual(layoutText(layout.render(80)), ["content-0", "content-1", "content-2", "content-3", "editor", "footer"]);
   assert.equal(layout.scrollToBottom(), true);
   assert.equal(renderRequests, 3);
 });
@@ -108,9 +117,9 @@ test("fixed layout pins bottom rows and scrolls only content", () => {
 test("fixed layout pads short conversations above pinned chrome", () => {
   let height = 6;
   const layout = new FixedBottomContainer(new Lines(["one"]), new Lines(["editor", "footer"]), () => height, () => {});
-  assert.deepEqual(layout.render(80), ["one", "", "", "", "editor", "footer"]);
+  assert.deepEqual(layoutText(layout.render(80)), ["one", "", "", "", "editor", "footer"]);
   height = 4;
-  assert.deepEqual(layout.render(80), ["one", "", "editor", "footer"]);
+  assert.deepEqual(layoutText(layout.render(80)), ["one", "", "editor", "footer"]);
 });
 
 test("editor lower boundary excludes multiline, history, and autocomplete navigation", async () => {
@@ -192,12 +201,12 @@ test("history stays anchored while scrolled and resumes following at bottom", ()
   layout.scrollPage(-1);
   const anchoredTop = layout.getScrollState().scrollTop;
   content.lines.push("content-8", "content-9");
-  assert.equal(layout.render(80)[0], `content-${anchoredTop}`);
+  assert.equal(layoutText(layout.render(80))[0], `content-${anchoredTop}`);
   assert.equal(layout.getScrollState().followBottom, false);
 
   layout.scrollToBottom();
   content.lines.push("content-10");
-  assert.deepEqual(layout.render(80).slice(-3), ["content-10", "editor", "footer"]);
+  assert.deepEqual(layoutText(layout.render(80)).slice(-3), ["content-10", "editor", "footer"]);
   assert.equal(layout.getScrollState().followBottom, true);
 });
 
@@ -386,9 +395,11 @@ test("footer navigation upgrade patches recover partial installs", () => {
 
 test("mouse text selection delegates mouse mode ownership to TUI", () => {
   const source = readFileSync(path.join(agentRoot, "extensions/mouse-text-selection.ts"), "utf8");
-  assert.match(source, /setMouseMotionTracking\(armed\)/);
-  assert.match(source, /mouse\?\.wheel/);
-  assert.match(source, /isMouseSelectionModeArmed/);
+  assert.match(source, /setMouseMotionTracking\(true\)/);
+  assert.match(source, /setMouseMotionTracking\(false\)/);
+  assert.match(source, /getFrameSnapshot\(\)/);
+  assert.match(source, /setFrameHighlights/);
+  assert.doesNotMatch(source, /isMouseSelectionModeArmed|selectionModeArmed/);
   assert.doesNotMatch(source, /process\.stdout\.write/);
   assert.doesNotMatch(source, /ENABLE_DRAG_MOUSE|DISABLE_DRAG_MOUSE/);
 });

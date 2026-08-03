@@ -13,6 +13,17 @@ agent_core="$root/node_modules/@earendil-works/pi-agent-core"
 tui="$root/node_modules/@earendil-works/pi-tui"
 conversion="${PI_CODEX_CONVERSION_PACKAGE:-$HOME/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion}"
 
+package_version() {
+  node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).version)' "$1"
+}
+
+pi_version="$(package_version "$root/package.json")"
+tui_version="$(package_version "$tui/package.json")"
+if [ "$pi_version" != "0.83.0" ] || [ "$tui_version" != "0.83.0" ]; then
+  echo "Unsupported Pi runtime: require Pi 0.83.0 and Pi TUI 0.83.0; found Pi $pi_version and Pi TUI $tui_version" >&2
+  exit 1
+fi
+
 PI_CODEX_CONVERSION_PACKAGE="$conversion" \
   "$patches/../scripts/repair-pi-codex-native.sh"
 
@@ -29,6 +40,73 @@ if grep -q 'setMouseMotionTracking(enabled)' "$tui/dist/tui.js"; then
 else
   patch -d "$tui" -p1 < "$patches/pi-tui-0.83-mouse-ownership.patch"
   echo "Applied Pi TUI mouse ownership patch"
+fi
+
+contains_all() {
+  file="$1"
+  shift
+  for symbol do
+    grep -Fq "$symbol" "$file" || return 1
+  done
+}
+
+frame_pointer_complete() {
+  contains_all "$tui/dist/tui.js" \
+    'const FRAME_ANNOTATION_NONCE' \
+    'function frameAnnotation(kind, payload)' \
+    'function stripFrameAnnotations(lines)' \
+    'function collectFrameLinkSpans(lines, transcriptRows, generatedPadding)' \
+    'function frameSnapshotSignature(frame)' \
+    'function cloneFrameSnapshot(frame)' \
+    'getFrameSnapshot()' \
+    'setFrameHighlights(revision, ranges)' \
+    'clearFrameHighlights()' \
+    'commitFrame(lines, width, height, transcriptRows, generatedPadding, linkSpans)' \
+    'applyFrameHighlights(lines)' &&
+    contains_all "$tui/dist/tui.d.ts" \
+      'export interface FrameTranscriptRow' \
+      'export interface FrameGeneratedPadding' \
+      'export interface FrameLinkSpan' \
+      'export interface FrameHighlightRange' \
+      'export interface FrameSnapshot' \
+      'getFrameSnapshot(): FrameSnapshot | null' \
+      'setFrameHighlights(revision: number, ranges: readonly FrameHighlightRange[]): boolean' \
+      'clearFrameHighlights(): void' &&
+    contains_all "$tui/dist/index.d.ts" \
+      'type FrameGeneratedPadding' \
+      'type FrameHighlightRange' \
+      'type FrameLinkSpan' \
+      'type FrameSnapshot' \
+      'type FrameTranscriptRow' &&
+    contains_all "$tui/dist/components/markdown.js" \
+      'function safeHttpHyperlinkTarget(href)' \
+      'Keep semantic HTTP(S) metadata for Pi-owned clicks' &&
+    patch -d "$tui" -p1 --reverse --dry-run --batch < "$patches/pi-tui-0.83-integrated-pointer.patch" >/dev/null 2>&1
+}
+
+frame_pointer_partial() {
+  grep -q 'FRAME_ANNOTATION_NONCE\|getFrameSnapshot\|setFrameHighlights\|collectFrameLinkSpans' "$tui/dist/tui.js" ||
+    grep -q 'FrameSnapshot\|FrameHighlightRange' "$tui/dist/tui.d.ts" ||
+    grep -q 'FrameSnapshot\|FrameHighlightRange' "$tui/dist/index.d.ts" ||
+    grep -q 'safeHttpHyperlinkTarget\|Pi-owned clicks' "$tui/dist/components/markdown.js"
+}
+
+if frame_pointer_complete; then
+  echo "Pi TUI integrated pointer patch already applied"
+elif frame_pointer_partial; then
+  echo "Refusing partial Pi TUI integrated pointer install; restore clean Pi TUI 0.83.0 files before retrying" >&2
+  exit 1
+else
+  if ! patch -d "$tui" -p1 --forward --dry-run < "$patches/pi-tui-0.83-integrated-pointer.patch" >/dev/null; then
+    echo "Pi TUI integrated pointer patch dry-run failed; runtime hunks drifted" >&2
+    exit 1
+  fi
+  patch -d "$tui" -p1 --forward < "$patches/pi-tui-0.83-integrated-pointer.patch"
+  if ! frame_pointer_complete; then
+    echo "Pi TUI integrated pointer patch applied without complete sentinels" >&2
+    exit 1
+  fi
+  echo "Applied Pi TUI integrated pointer patch"
 fi
 
 if grep -q 'autocompleteRequestScheduled' "$tui/dist/components/editor.js" &&
