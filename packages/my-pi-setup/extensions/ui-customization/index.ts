@@ -424,11 +424,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
             modelInfo.contextWindow > 0
               ? formatTokens(modelInfo.contextWindow)
               : "?";
-          const tps =
-            modelInfo.tokensPerSecond === null
-              ? "— tok/s"
-              : `${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const usage = `${contextPercent}%/${contextWindow} · ${tps}`;
+          const usage = `${contextPercent}%/${contextWindow}`;
           const model = modelInfo.provider
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
