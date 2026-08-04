@@ -405,7 +405,7 @@ test("mouse text selection delegates mouse mode ownership to TUI", () => {
 });
 
 test("apply script upgrades prior pinned-layout installs", () => {
-  const source = readFileSync(path.join(agentRoot, "packages/my-pi-setup/scripts/apply-pi-inline-compaction.sh"), "utf8");
+  const source = readFileSync(path.join(agentRoot, "packages/my-pi-setup/scripts/apply-pi-patches.sh"), "utf8");
   assert.match(source, /setMouseMotionTracking\(enabled\)/);
   assert.match(source, /isAtVisualBottomBoundary\(\)/);
   assert.match(source, /pi-tui-0\.83-mouse-ownership\.patch/);

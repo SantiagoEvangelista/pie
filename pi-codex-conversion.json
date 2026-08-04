@@ -28,19 +28,16 @@
     "backgroundShellCloseShortcut": "alt+r"
   },
   "compaction": {
-    "responsesCompaction": true
+    "responsesCompaction": false
   },
   "beta": {
     "codeMode": true,
-    "responsesLite": false,
-    "v2UserMessageRetention": 64
+    "responsesLite": false
   },
   "openai": {
     "fast": false,
     "verbosity": "low",
-    "forceCachedWebSockets": true,
-    "webSearchModel": "gpt-5.6-luna",
-    "compactionModel": "gpt-5.6-luna",
-    "compactionReasoning": "current"
+    "forceCachedWebSockets": false,
+    "webSearchModel": "gpt-5.6-luna"
   }
 }

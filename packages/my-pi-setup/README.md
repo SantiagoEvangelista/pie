@@ -14,8 +14,7 @@ This setup is fairly opinionated, it:
   and escalates only deep specialist work to Sol/high
 - adds an ask user tool, which lets the model ask multiple choice questions
 - condenses routine tool calls into Claude-style activity summaries while keeping edit/write patch previews and workflow results
-- compacts context between tool batches before long agent turns can overflow
-- commits compaction transactionally and fails closed on unsafe native replay
+- commits Pi-native compaction transactionally and rejects stale or corrupt checkpoints
 - adds first-class `fd` (file discovery) and `rg` (content search) tools
 
 ![Pi setup interface](assets/pi-setup.jpeg)

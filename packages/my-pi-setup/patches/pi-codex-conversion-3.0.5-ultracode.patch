@@ -23,27 +23,3 @@
  }
  export function createCodexExtensionRuntime(pi) {
      const state = {
---- a/src/adapter/compaction/compaction.ts
-+++ b/src/adapter/compaction/compaction.ts
-@@ -65,7 +65,8 @@
- 	state: AdapterState,
- 	compactionTargetModel: Model<Api>,
- ): NativeCompactionRequestOptions["reasoning"] {
--	const level = pi.getThinkingLevel();
-+	const selectedLevel = pi.getThinkingLevel();
-+	const level = selectedLevel === "ultracode" ? "xhigh" : selectedLevel;
- 	if (!compactionTargetModel.reasoning || level === "off") return undefined;
- 	const clampedLevel = clampThinkingLevel(compactionTargetModel, level as ModelThinkingLevel);
- 	const rawEffort = compactionTargetModel.thinkingLevelMap?.[clampedLevel] ?? clampedLevel;
---- a/dist/adapter/compaction/compaction.js
-+++ b/dist/adapter/compaction/compaction.js
-@@ -46,7 +46,8 @@
-     return convertResponsesTools(tools, { strict: null });
- }
- function buildCompactionReasoning(pi, ctx, state, compactionTargetModel) {
--    const level = pi.getThinkingLevel();
-+    const selectedLevel = pi.getThinkingLevel();
-+    const level = selectedLevel === "ultracode" ? "xhigh" : selectedLevel;
-     if (!compactionTargetModel.reasoning || level === "off")
-         return undefined;
-     const clampedLevel = clampThinkingLevel(compactionTargetModel, level);

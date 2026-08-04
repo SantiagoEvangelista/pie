@@ -487,7 +487,7 @@ test("fallback Markdown links remain semantic when terminal lacks OSC-8 support"
 test("integrated-pointer completeness requires every declaration and exact reversible patch", () => {
   const setupRoot = path.resolve(agentRoot, "packages/my-pi-setup");
   const patchPath = path.join(setupRoot, "patches/pi-tui-0.83-integrated-pointer.patch");
-  const script = readFileSync(path.join(setupRoot, "scripts/apply-pi-inline-compaction.sh"), "utf8");
+  const script = readFileSync(path.join(setupRoot, "scripts/apply-pi-patches.sh"), "utf8");
   for (const symbol of [
     "FrameTranscriptRow",
     "FrameGeneratedPadding",

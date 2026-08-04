@@ -25,23 +25,18 @@
      _overflowRecoveryAttempted = false;
      // Branch summarization state
      _branchSummaryAbortController = undefined;
-@@ -266,18 +277,21 @@
+@@ -266,17 +277,17 @@
                  ? async (_turn, signal) => await this.agent.prepareNextTurn?.(signal)
                  : undefined);
          this.agent.prepareNextTurnWithContext = async (turn, signal) => {
--            const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
+             const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
 -            const previousContext = previousSnapshot?.context ?? turn.context;
--            const nextContext = await this._compactBetweenAgentTurns(previousContext, signal);
-+            const compactedContext = await this._compactBetweenAgentTurns(turn.context, signal);
-+            const previousSnapshot = await previousPrepareNextTurnWithContext?.({
-+                ...turn,
-+                context: compactedContext,
-+            }, signal);
-+            const nextContext = previousSnapshot?.context ?? compactedContext;
++            const nextContext = previousSnapshot?.context ?? turn.context;
              return {
                  ...previousSnapshot,
                  context: {
-                     ...nextContext,
+-                    ...previousContext,
++                    ...nextContext,
 -                    systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
 -                    tools: this.agent.state.tools.slice(),
 +                    systemPrompt: nextContext.systemPrompt ?? this._systemPromptOverride ?? this._baseSystemPrompt,

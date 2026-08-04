@@ -1,8 +1,0 @@
-{
-  "name": "auto-compact-bridge",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node --test --experimental-strip-types logic.test.ts"
-  }
-}

@@ -38,11 +38,6 @@ install so its wheel listener is re-registered after every extension bind.
 This preserves Option-A cancellation after reload/rebind; clean installs receive
 the same change from the consolidated Pi patch.
 
-`pi-0.83-inline-compaction.patch` runs auto-compaction from agent-core's
-`prepareNextTurn` boundary. It replaces active history and continues the same
-agent turn, matching Codex inline compaction instead of aborting and injecting a
-synthetic user continuation.
-
 `pi-0.83-ultracode.patch` adds the selectable virtual `ultracode` harness
 level, UI/docs, session persistence, and local-compaction normalization.
 
@@ -59,15 +54,7 @@ compaction boundary while preserving `ultracode` in session state for
 extensions.
 
 `pi-codex-conversion-3.0.5-ultracode.patch` normalizes direct Codex WebSocket
-prewarm and native compaction requests to `xhigh` too.
-
-`pi-codex-conversion-3.0.5-compaction-hardening.patch` builds endpoint input
-from Pi's immutable compaction snapshot, validates opaque output/window shape,
-uses strict latest-checkpoint replay without lenient projection variants, keeps
-a durable native marker plus readable previous summary, advertises the native
-feature whenever the final request body needs it, and blocks requests that
-cannot safely restore encrypted context. Opaque checkpoints remain reusable
-across supported model switches on the same provider/API/endpoint.
+prewarm requests to `xhigh` too.
 
 Focused regression suite:
 
@@ -80,7 +67,7 @@ Focused regression suite:
 Pi updates overwrite the global runtime file. Reapply with:
 
 ```sh
-~/.pi/agent/packages/my-pi-setup/scripts/apply-pi-inline-compaction.sh
+~/.pi/agent/packages/my-pi-setup/scripts/apply-pi-patches.sh
 ```
 
 Apply script requires both Pi and Pi-TUI exactly `0.83.0`. Integrated-pointer

@@ -155,13 +155,6 @@ else
   echo "Applied Pi pinned listener-order patch"
 fi
 
-if grep -q '_compactBetweenAgentTurns' "$agent_session"; then
-  echo "Pi inline compaction patch already applied"
-else
-  patch -d "$root" -p1 < "$patches/pi-0.83-inline-compaction.patch"
-  echo "Applied Pi inline compaction patch"
-fi
-
 if grep -q 'ULTRACODE_THINKING_LEVEL' "$agent_session" &&
    grep -q '"ultracode"' "$root/dist/cli/args.js"; then
   echo "Pi ultracode patch already applied"
@@ -196,25 +189,13 @@ if [ -d "$conversion" ]; then
   if [ "$conversion_version" != "3.0.5" ]; then
     echo "Skipping Pi Codex conversion patches: require 3.0.5, found $conversion_version"
   else
-    if grep -q 'level === "ultracode"' "$conversion/dist/extension/runtime.js" &&
-       grep -q 'selectedLevel === "ultracode"' "$conversion/dist/adapter/compaction/compaction.js"; then
+    if grep -q 'level === "ultracode"' "$conversion/dist/extension/runtime.js"; then
       echo "Pi Codex conversion ultracode patch already applied"
     else
       patch -d "$conversion" -p1 < "$patches/pi-codex-conversion-3.0.5-ultracode.patch"
       echo "Applied Pi Codex conversion ultracode patch"
     fi
 
-    if grep -q 'readableFallback' "$conversion/dist/adapter/compaction/compaction.js" &&
-       grep -q 'one canonical compaction output item and no additional output' "$conversion/dist/adapter/compaction/remote-v2-client.js" &&
-       grep -q 'withRemoteCompactionV2ForBody' "$conversion/dist/providers/openai-codex-custom-provider.js" &&
-       grep -q 'never result.stdout/result.stderr' "$conversion/dist/tools/code-mode/custom-tool-prompt.js" &&
-       ! grep -q 'buildLenientNativeReplayPayload' "$conversion/dist/adapter/replay/native-replay-matching.js" &&
-       ! grep -q 'buildLenientNativeReplayPayload' "$conversion/dist/adapter/replay/native-replay-segments.js"; then
-      echo "Pi Codex conversion compaction hardening patch already applied"
-    else
-      patch -d "$conversion" -p1 < "$patches/pi-codex-conversion-3.0.5-compaction-hardening.patch"
-      echo "Applied Pi Codex conversion compaction hardening patch"
-    fi
   fi
 fi
 
@@ -232,12 +213,5 @@ node --check "$agent_core/dist/agent-loop.js"
 node --check "$agent_core/dist/harness/agent-harness.js"
 if [ -d "$conversion" ]; then
   node --check "$conversion/dist/extension/runtime.js"
-  node --check "$conversion/dist/adapter/compaction/compaction.js"
   node --check "$conversion/dist/adapter/provider-request.js"
-  node --check "$conversion/dist/adapter/compaction/remote-v2-client.js"
-  node --check "$conversion/dist/adapter/compaction/remote-v2-history.js"
-  node --check "$conversion/dist/adapter/compaction/types.js"
-  node --check "$conversion/dist/adapter/replay/native-replay-matching.js"
-  node --check "$conversion/dist/adapter/replay/native-replay-segments.js"
-  node --check "$conversion/dist/providers/openai-codex-custom-provider.js"
 fi
