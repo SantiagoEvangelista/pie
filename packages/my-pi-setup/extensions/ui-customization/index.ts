@@ -385,6 +385,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
             footerData.getExtensionStatuses().entries(),
           ).sort(([a], [b]) => a.localeCompare(b));
           const statusSignature = JSON.stringify(statuses);
+          const fastMode = statuses.find(([key]) => key === "fast-mode")?.[1];
           const themeSignature = [
             theme.fg("text", "x"),
             theme.fg("muted", "x"),
@@ -424,7 +425,9 @@ export default function uiCustomization(pi: ExtensionAPI) {
             modelInfo.contextWindow > 0
               ? formatTokens(modelInfo.contextWindow)
               : "?";
-          const usage = `${contextPercent}%/${contextWindow}`;
+          const usage = fastMode
+            ? `${contextPercent}%/${contextWindow} · ${fastMode}`
+            : `${contextPercent}%/${contextWindow}`;
           const model = modelInfo.provider
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
@@ -435,7 +438,9 @@ export default function uiCustomization(pi: ExtensionAPI) {
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
-          const statusLines = statuses.flatMap(([, text]) => text.split("\n"));
+          const statusLines = statuses
+            .filter(([key]) => key !== "fast-mode")
+            .flatMap(([, text]) => text.split("\n"));
           for (const statusLine of statusLines) {
             lines.push(
               truncateToWidth(statusLine, width, theme.fg("dim", "...")),
