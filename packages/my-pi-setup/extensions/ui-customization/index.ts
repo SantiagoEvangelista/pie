@@ -33,10 +33,7 @@ import {
   type FooterAction,
   type FooterNavigationIntent,
 } from "./footer-navigation.ts";
-import {
-  applyPersistentBackground,
-  renderFocusedActionLabel,
-} from "./theme-rendering.ts";
+import { renderFocusedActionLabel } from "./theme-rendering.ts";
 
 type Rgb = [number, number, number];
 interface RenderableNode {
@@ -483,11 +480,6 @@ export default function uiCustomization(pi: ExtensionAPI) {
           keybindings,
         ) ?? new CustomEditor(tui, themedEditor, keybindings)
       ) as BoundaryAwareEditor;
-      const render = editor.render.bind(editor);
-      editor.render = (width: number) => {
-        const background = ctx.ui.theme.getBgAnsi("customMessageBg");
-        return applyPersistentBackground(render(width), background);
-      };
       const handleInput = editor.handleInput.bind(editor);
 
       editor.handleInput = (data: string) => {
