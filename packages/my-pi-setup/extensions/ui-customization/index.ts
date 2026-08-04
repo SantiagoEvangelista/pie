@@ -341,8 +341,15 @@ export default function uiCustomization(pi: ExtensionAPI) {
       requestRender = () => tui.requestRender();
       scheduleThemeRemoval(tui);
 
+      let cachedWidth = -1;
+      let cachedTitle = "";
+      let cachedLines: string[] = [];
+
       return {
         render(width: number) {
+          if (width === cachedWidth && title === cachedTitle) {
+            return cachedLines;
+          }
           const art = TITLE_LINES.map((line, row) =>
             center(gradientText(line, row * 0.045), width),
           );
@@ -350,7 +357,10 @@ export default function uiCustomization(pi: ExtensionAPI) {
             `${BOLD}${gradientText(title, 0.18)}${RESET}`,
             width,
           );
-          return ["", ...art, subtitle, ""];
+          cachedWidth = width;
+          cachedTitle = title;
+          cachedLines = ["", ...art, subtitle, ""];
+          return cachedLines;
         },
         invalidate() {},
       };
@@ -359,10 +369,39 @@ export default function uiCustomization(pi: ExtensionAPI) {
     ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
       requestRender = () => tui.requestRender();
 
+      let cachedFooterWidth = -1;
+      let cachedModelInfo = modelInfo;
+      let cachedGitInfo = gitInfo;
+      let cachedStatusSignature = "";
+      let cachedThemeSignature = "";
+      let cachedHyperlinks = false;
+      let cachedFooterLines: string[] = [];
+
       activeFooter = new DashboardFooter(
         tui,
         theme,
         (width) => {
+          const statuses = Array.from(
+            footerData.getExtensionStatuses().entries(),
+          ).sort(([a], [b]) => a.localeCompare(b));
+          const statusSignature = JSON.stringify(statuses);
+          const themeSignature = [
+            theme.fg("text", "x"),
+            theme.fg("muted", "x"),
+            theme.fg("dim", "x"),
+          ].join("\0");
+          const hyperlinks = getCapabilities().hyperlinks;
+          if (
+            width === cachedFooterWidth &&
+            modelInfo === cachedModelInfo &&
+            gitInfo === cachedGitInfo &&
+            statusSignature === cachedStatusSignature &&
+            themeSignature === cachedThemeSignature &&
+            hyperlinks === cachedHyperlinks
+          ) {
+            return cachedFooterLines;
+          }
+
           const directory = theme.fg("text", formatDirectory(ctx.cwd));
           const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
           let git = gitInfo.branch
@@ -371,7 +410,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
           if (gitInfo.pullRequest) {
             const prLabel = `PR #${gitInfo.pullRequest.number}`;
-            const linkedPr = getCapabilities().hyperlinks
+            const linkedPr = hyperlinks
               ? hyperlink(prLabel, gitInfo.pullRequest.url)
               : prLabel;
             git += ` · ${linkedPr}`;
@@ -394,23 +433,27 @@ export default function uiCustomization(pi: ExtensionAPI) {
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
 
-          const lines = [
+          const lines: string[] = [
             columns(directory, theme.fg("muted", model), width),
             columns(theme.fg("muted", usage), theme.fg("muted", git), width),
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
-          const statuses = footerData.getExtensionStatuses();
-          const statusLines = Array.from(statuses.entries())
-            .sort(([a], [b]) => a.localeCompare(b))
-            .flatMap(([, text]) => text.split("\n"));
+          const statusLines = statuses.flatMap(([, text]) => text.split("\n"));
           for (const statusLine of statusLines) {
             lines.push(
               truncateToWidth(statusLine, width, theme.fg("dim", "...")),
             );
           }
 
-          return lines;
+          cachedFooterWidth = width;
+          cachedModelInfo = modelInfo;
+          cachedGitInfo = gitInfo;
+          cachedStatusSignature = statusSignature;
+          cachedThemeSignature = themeSignature;
+          cachedHyperlinks = hyperlinks;
+          cachedFooterLines = lines;
+          return cachedFooterLines;
         },
         (action) => pi.events.emit(OPEN_DASHBOARD_CHANNEL, action),
       );
