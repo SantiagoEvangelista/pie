@@ -39,6 +39,7 @@ import {
   isDashboardAction,
 } from "../shared/dashboard-state.ts";
 import {
+  delegatedPromptValidationError,
   defaultDelegatedReasoningEffort,
   isDelegatedReasoningEffortAllowed,
 } from "../shared/intelligence-tiering.ts";
@@ -562,11 +563,13 @@ export default function workflows(pi: ExtensionAPI) {
           return { ok: false, output: "", error };
         };
 
-        const prompt = buildWorkflowAgentPrompt(
+        const promptText =
           typeof promptValue === "string"
             ? promptValue
-            : String(promptValue ?? ""),
-        );
+            : String(promptValue ?? "");
+        const promptError = delegatedPromptValidationError(promptText);
+        if (promptError) return fail(`agent "${label}": ${promptError}`);
+        const prompt = buildWorkflowAgentPrompt(promptText);
         if (!prompt.trim())
           return fail("agent() requires a non-empty prompt string");
         if (controller.signal.aborted)

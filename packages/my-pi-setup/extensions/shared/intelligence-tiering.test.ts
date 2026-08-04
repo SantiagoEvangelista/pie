@@ -8,6 +8,7 @@ import {
   DEFAULT_DELEGATED_MODEL_ID,
   DEFAULT_DELEGATED_PROVIDER,
   DEFAULT_DELEGATED_REASONING_EFFORT,
+  delegatedPromptValidationError,
   defaultDelegatedReasoningEffort,
   DELEGATED_MODEL_TIERING_GUIDELINES,
   isDelegatedReasoningEffortAllowed,
@@ -61,8 +62,38 @@ test("policy reserves parent for orchestration and routes narrow child work", ()
   assert.match(policy, /one question or change/);
   assert.match(policy, /explicit stop condition/);
   assert.match(policy, /open-ended discovery/);
+  assert.match(policy, /Never prohibit read-only tool use/);
   assert.match(policy, /Parallel edits require disjoint ownership/);
   assert.doesNotMatch(policy, /Luna|Terra|Kimi/i);
+});
+
+test("source-dependent child prompts cannot ban inspection tools", () => {
+  const reproducedPrompt =
+    "Atomic RTL review of ONLY current `rtl/iridium/decimate_hb_tdm.v` change. Do not edit/run tools. Return blockers or PASS.";
+  assert.match(
+    delegatedPromptValidationError(reproducedPrompt) ?? "",
+    /Source-dependent child prompt prohibits tool use/,
+  );
+  assert.equal(
+    delegatedPromptValidationError(
+      "Review only `rtl/iridium/decimate_hb_tdm.v`. Do not edit; use read-only tools. Return blockers or PASS.",
+    ),
+    undefined,
+  );
+  assert.equal(
+    delegatedPromptValidationError(
+      "Review this embedded diff without tools:\n```diff\n" +
+        "+".repeat(100) +
+        "\n```\nReturn blockers or PASS.",
+    ),
+    undefined,
+  );
+  assert.equal(
+    delegatedPromptValidationError(
+      "Reason about whether a bounded queue can deadlock. Do not use tools.",
+    ),
+    undefined,
+  );
 });
 
 test("model-facing examples use Sol medium and Sol high", () => {

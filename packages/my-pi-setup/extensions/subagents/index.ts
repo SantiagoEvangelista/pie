@@ -41,6 +41,7 @@ import {
   OPEN_DASHBOARD_CHANNEL,
   isDashboardAction,
 } from "../shared/dashboard-state.ts";
+import { delegatedPromptValidationError } from "../shared/intelligence-tiering.ts";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
   formatElapsed,
@@ -315,13 +316,15 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const manager = await getManager();
-
       const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
       if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
+      const promptError = delegatedPromptValidationError(params.prompt);
+      if (promptError) throw new Error(promptError);
+
+      const manager = await getManager();
       const title = params.name.trim().slice(0, 160) || "subagent";
       const snap = await runTool(
         getRuntime(),

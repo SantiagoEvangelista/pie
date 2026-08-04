@@ -34,6 +34,7 @@ Pi can use any model shown by `pi --list-models`. Prefer `provider/model-id`; a 
 - Never assign a child compound inspect/design/implement/test work. Split stages into separate calls. If a prompt has multiple independent files, questions, or deliverables, split again.
 - For nontrivial work, prefer 3-4 orthogonal workers followed by at least 2 independent verification/critique tasks when scope permits. Use later batches instead of broader prompts; max four concurrent.
 - Every prompt names exact inputs, one owned file or tightly coupled file set, one question/change, one deliverable, acceptance criteria, explicit stop condition, and out-of-scope work. Ban open-ended discovery, adjacent exploration, generic subsystem fixes, and overlapping whole-repo scans.
+- Never prohibit read-only tools when a child must inspect source, files, patches, or diffs unless complete evidence is embedded. Use “do not edit” to constrain review; never use “do not run tools” for source-dependent work.
 - Parallel writers own disjoint files. One agent owns shared/integration files; parent resolves conflicts and reviews every result.
 
 ## Spawn and Manage

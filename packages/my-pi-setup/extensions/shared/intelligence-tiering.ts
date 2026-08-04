@@ -16,9 +16,45 @@ export const DELEGATED_MODEL_TIERING_GUIDELINES = [
   "Before every child call, the parent must reduce the assignment to one mechanical or independently verifiable purpose. Never delegate a compound inspect-plus-design-plus-implement-plus-test role; split those stages into separate calls or later batches.",
   "Use more, narrower agents for nontrivial work: prefer 3-4 orthogonal worker tasks in an initial batch and at least 2 independent verification or critique tasks after changes when scope supports them. If one prompt spans multiple independent files, questions, or deliverables, split it again. Use later batches rather than widening prompts; do not add filler agents.",
   "Give each child exact inputs, one owned file or tightly coupled file set, one question or change, one concrete deliverable, acceptance criteria, and an explicit stop condition. Tell it what not to inspect or change. Forbid adjacent exploration, open-ended discovery, overlapping whole-repo scans, duplicate implementations, and generic requests to understand or fix an entire subsystem.",
+  "Never prohibit read-only tool use when a child must inspect a file, source, patch, or diff unless the complete evidence is embedded in its prompt. Use 'do not edit' to preserve read-only scope; do not say 'do not run tools' for source-dependent review.",
   "Parallel edits require disjoint ownership. Give shared files or integration surfaces one writer; parent adjudicates conflicts and reviews every child result.",
   "Model syntax differs by tool: subagent_spawn uses `model: \"<provider>/<model-id>\"`; workflow agent() uses separate `provider` and `model` values.",
 ] as const;
+
+const SOURCE_REFERENCE_PATTERN =
+  /\x60[^\x60\n]+\.[a-z0-9]{1,10}\x60|(?:^|[\s(])(?:\.{0,2}\/)?(?:[\w.-]+\/)+[\w.-]+\.[a-z0-9]{1,10}\b/i;
+const SOURCE_TASK_PATTERN =
+  /\b(?:review|audit|inspect|verify|analy[sz]e|check|trace)\b[\s\S]{0,240}\b(?:source|diff|patch|file|code|rtl|implementation)\b|\b(?:source|diff|patch|file|code|rtl|implementation)\b[\s\S]{0,240}\b(?:review|audit|inspect|verify|analy[sz]e|check|trace)\b/i;
+const TOOL_BAN_PATTERNS = [
+  /\b(?:do not|don't|must not|never)\s+(?:(?:edit|modify|write)\s*(?:\/|,|and|or)\s*)?(?:run|use|call|invoke)\s+(?:any\s+)?tools?\b/i,
+  /\b(?:without|no)\s+(?:using\s+)?(?:tool\s+(?:use|access)|tools?)\b/i,
+  /\btool\s+(?:use|access)\s+(?:is\s+)?(?:prohibited|forbidden|disabled|unavailable)\b/i,
+] as const;
+
+function embedsSourceEvidence(prompt: string): boolean {
+  const fencedBlocks = prompt.match(/```[\s\S]*?```/g) ?? [];
+  return fencedBlocks.some(
+    (block) => block.replace(/^```[^\n]*\n?|```$/g, "").trim().length >= 80,
+  );
+}
+
+/** Reject contradictory child prompts before spending an agent call. */
+export function delegatedPromptValidationError(
+  prompt: string,
+): string | undefined {
+  const sourceDependent =
+    SOURCE_REFERENCE_PATTERN.test(prompt) || SOURCE_TASK_PATTERN.test(prompt);
+  const prohibitsTools = TOOL_BAN_PATTERNS.some((pattern) =>
+    pattern.test(prompt),
+  );
+  if (!sourceDependent || !prohibitsTools || embedsSourceEvidence(prompt)) {
+    return undefined;
+  }
+  return (
+    "Source-dependent child prompt prohibits tool use without embedding the source or diff. " +
+    "Allow read-only inspection (for example, 'Do not edit; inspect only <path>') or embed the complete evidence."
+  );
+}
 
 function usesDelegatedSolTier(
   provider: string | undefined,
