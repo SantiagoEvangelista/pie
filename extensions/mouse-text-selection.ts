@@ -537,9 +537,16 @@ export class MouseSelectionEditor extends CustomEditor {
 		return orderedPositions(this.anchor, this.focus);
 	}
 
+	private refreshSelection(): void {
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
 	private clearSelection(): void {
+		const changed = this.anchor !== undefined || this.focus !== undefined;
 		this.anchor = undefined;
 		this.focus = undefined;
+		if (changed) this.refreshSelection();
 	}
 
 	private positionFromMouse(event: MouseEvent): Position | undefined {
@@ -609,6 +616,7 @@ export class MouseSelectionEditor extends CustomEditor {
 		this.pointerDragging = true;
 		this.setCursorPosition(position);
 		this.tui.setMouseMotionTracking(true);
+		this.refreshSelection();
 		return true;
 	}
 
@@ -624,6 +632,7 @@ export class MouseSelectionEditor extends CustomEditor {
 		editor.state.cursorLine = line;
 		editor.setCursorCol(col);
 		editor.snappedFromCursorCol = null;
+		this.refreshSelection();
 	}
 
 	private selectedText(): string | undefined {
@@ -668,6 +677,7 @@ export class MouseSelectionEditor extends CustomEditor {
 		this.anchor = { line: 0, col: 0 };
 		this.focus = { line: lines.length - 1, col: lines.at(-1)?.length ?? 0 };
 		this.setCursorPosition(this.focus);
+		this.refreshSelection();
 	}
 
 	private extendSelection(data: string): boolean {
@@ -684,6 +694,7 @@ export class MouseSelectionEditor extends CustomEditor {
 			this.anchor ??= this.getCursor();
 			super.handleInput(plainKey);
 			this.focus = this.getCursor();
+			this.refreshSelection();
 			return true;
 		}
 		return false;

@@ -396,6 +396,8 @@ test("textbox supports Shift+Arrow and always-on mouse selection", () => {
   const mouseTui = new TUI(new CaptureTerminal());
   const mouseEditor = new MouseSelectionEditor(mouseTui, editorTheme, inertKeybindings, () => {});
   mouseTui.setFocus(mouseEditor);
+  let mouseRenderRequests = 0;
+  mouseTui.requestRender = () => { mouseRenderRequests++; };
   mouseEditor.setText("hello");
   mouseEditor.render(30);
   mouseTui.hardwareCursorRow = mouseEditor.lastCursorRenderRow;
@@ -406,6 +408,7 @@ test("textbox supports Shift+Arrow and always-on mouse selection", () => {
   assert.equal(mouseEditor.handlePointerMouse({
     rawCode: 32, button: 0, x: 4, y: 1, release: false, drag: true, wheel: false,
   }), true);
+  assert.ok(mouseRenderRequests >= 2);
   assert.match(mouseEditor.render(30).join("\n"), /\x1b\[7m/);
   mouseEditor.handleInput("X");
   assert.equal(mouseEditor.getText(), "hXo");
