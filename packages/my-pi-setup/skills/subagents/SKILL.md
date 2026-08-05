@@ -43,6 +43,7 @@ Call `subagent_spawn` with one complete atomic `prompt`, short `name`, and optio
 
 - `subagent_check({ id })`: peek without blocking.
 - `subagent_list()`: list all runs.
+- `subagent_send({ id, message })`: queue material new guidance into a running child, or resume a settled child with the same conversation context. Do not use it for status polling.
 - `subagent_wait({ ids })`: block only when results are required to proceed.
 - `subagent_cancel({ ids })`: stop runs while preserving partial transcripts.
 - `/subagents`: inspect or take over a run interactively.

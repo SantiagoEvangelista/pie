@@ -264,13 +264,49 @@ test("send steers an idle subagent into another turn", async () => {
     assert.equal(afterFirst?.status, "done");
 
     await runTool(runtime, manager.send(snap.id, "Second turn"));
-    // The fresh run flips the status back to running...
-    while (manager.view.get(snap.id)?.status !== "running") {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    // waitFor must treat the pre-RunStarted restart transition as pending.
     await runTool(runtime, manager.waitFor([snap.id]));
     const afterSecond = manager.view.get(snap.id);
     assert.equal(afterSecond?.status, "done");
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
+  });
+});
+
+test("a settled-session restart can be cancelled immediately", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", task("First turn")),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+
+    await runTool(runtime, manager.send(snap.id, "Second turn"));
+    const report = await runTool(runtime, manager.cancel([snap.id]));
+
+    assert.deepEqual(report, [
+      { id: snap.id, title: "test", status: "error", cancelled: true },
+    ]);
+    assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+  });
+});
+
+test("send queues guidance for a running subagent", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", task("Long first turn")),
+    );
+
+    await runTool(runtime, manager.send(snap.id, "Check the fallback path"));
+    while (
+      !manager.view
+        .get(snap.id)
+        ?.queued.some((item) => item.text === "Check the fallback path")
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    assert.equal(manager.view.get(snap.id)?.status, "running");
+    await runTool(runtime, manager.cancel([snap.id]));
   });
 });

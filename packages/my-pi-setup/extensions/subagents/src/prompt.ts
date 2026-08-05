@@ -15,6 +15,7 @@ export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent_spawn to delegate one atomic, self-contained purpose that can run in the background; give it a complete standalone prompt and split compound work into more calls or later batches.",
   "All subagents use the in-process pi harness; Claude Code and Codex CLI harnesses are disabled.",
   "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
+  "Use subagent_send only for material new context or a course correction after spawning; it queues guidance into a running child or resumes a settled child with the same context. Do not use it for status polling or to compensate for an incomplete initial prompt.",
   ...DELEGATED_MODEL_TIERING_GUIDELINES,
 ];
 
@@ -42,8 +43,26 @@ export function buildSubagentSpawnResult(options: {
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).\n` +
     `It runs in the background. Its result will be delivered to you when it finishes, ` +
-    `or use subagent_wait(ids: ["${options.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
+    `or use subagent_send to provide new guidance, subagent_wait(ids: ["${options.id}"]) to block for it, ` +
+    `subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
   );
+}
+
+/** Describes steering a running subagent or continuing a settled one. */
+export const SUBAGENT_SEND_TOOL_DESCRIPTION =
+  "Send new guidance to a subagent without waiting for it. During an active run, the message is queued as a course correction after the current assistant turn finishes its tool calls. A settled subagent resumes in the background under the same id with its conversation history preserved. Use this for material new context, not status polling.";
+
+/** Model-facing schema descriptions for subagent_send. */
+export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
+  id: 'Subagent id, e.g. "sa-1"',
+  message: "Non-empty additional instruction or context for the subagent",
+};
+
+export function buildSubagentSendResult(options: {
+  id: string;
+  title: string;
+}) {
+  return `Sent guidance to subagent ${options.id} "${options.title}". It continues in the background.`;
 }
 
 /** Describes explicit blocking collection of one or more subagent results. */

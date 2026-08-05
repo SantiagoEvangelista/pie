@@ -7,7 +7,7 @@ This setup is fairly opinionated, it:
 - adds firecrawl tools for searching and scraping
 - updates the bottom bar to have the info I prefer to see
 - adds background terminals + ui to manage them
-- adds pi-only subagents
+- adds pi-only subagents with mid-run steering and same-context continuation
 - adds workflows backed only by in-process pi subagents
 - adds `ultracode`: virtual xhigh effort plus default workflow orchestration
 - keeps Sol/ultracode as parent orchestrator, defaults workers to Sol/medium,

@@ -4,6 +4,7 @@
  * Tools (for the parent LLM):
  * - subagent_spawn: fire-and-forget spawn (prompt, title, working_dir, model,
  *   reasoning_effort). Max 4 running at once.
+ * - subagent_send: steer a running child or continue a settled child.
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.
@@ -56,12 +57,15 @@ import {
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
+  buildSubagentSendResult,
   buildSubagentSpawnResult,
   SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CHECK_TOOL_DESCRIPTION,
   SUBAGENT_LIST_TOOL_DESCRIPTION,
+  SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
@@ -371,6 +375,51 @@ export default function (pi: ExtensionAPI) {
           harness: "pi",
           model: snap.meta.modelLabel,
         },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_send",
+    label: "Send to Subagent",
+    description: SUBAGENT_SEND_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      id: Type.String({
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.id,
+      }),
+      message: Type.String({
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.message,
+      }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const message = params.message.trim();
+      if (!message) throw new Error("Provide a non-empty message.");
+
+      const manager = await getManager();
+      const snap = manager.view.get(params.id);
+      if (!snap || !isModelVisible(snap)) {
+        const known = manager.view
+          .list()
+          .filter(isModelVisible)
+          .map((item) => item.id);
+        throw new Error(
+          `Unknown subagent id "${params.id}". Known: ${known.join(", ") || "none"}.`,
+        );
+      }
+
+      await runTool(getRuntime(), manager.send(snap.id, message), {
+        signal,
+        interruptMessage: "Subagent send aborted.",
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: buildSubagentSendResult({ id: snap.id, title: snap.title }),
+          },
+        ],
+        details: { id: snap.id, title: snap.title },
       };
     },
   });

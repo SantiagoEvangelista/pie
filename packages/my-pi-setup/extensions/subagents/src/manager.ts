@@ -251,7 +251,9 @@ const makeManager = Effect.gen(function* () {
     const candidates = [...entries.values()]
       .filter(
         (e) =>
-          e.snapshot.status !== "running" && !waitInterest.has(e.snapshot.id),
+          e.snapshot.status !== "running" &&
+          e.restarting !== true &&
+          !waitInterest.has(e.snapshot.id),
       )
       .sort(
         (a, b) =>
@@ -269,8 +271,8 @@ const makeManager = Effect.gen(function* () {
 
   const settle = (entry: Entry, outcome: RunOutcome) => {
     const s = entry.snapshot;
+    if (s.status !== "running" && !entry.restarting) return;
     entry.restarting = false;
-    if (s.status !== "running") return;
     s.settledAt = Date.now();
     switch (outcome._tag) {
       case "Completed":
@@ -319,6 +321,7 @@ const makeManager = Effect.gen(function* () {
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
+        s.finalText = "";
         break;
       case "RunSettled":
         settle(entry, event.outcome);
@@ -501,7 +504,10 @@ const makeManager = Effect.gen(function* () {
         ).pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              if (entry.snapshot.status === "running") {
+              if (
+                entry.snapshot.status === "running" ||
+                entry.restarting === true
+              ) {
                 settle(entry, {
                   _tag: "Failed",
                   errorText: "Backend event stream ended unexpectedly",
@@ -536,7 +542,13 @@ const makeManager = Effect.gen(function* () {
       const loop = Effect.gen(function* () {
         while (true) {
           const pending = unique.filter(
-            (id) => entries.get(id)?.snapshot.status === "running",
+            (id) => {
+              const entry = entries.get(id);
+              return (
+                entry?.snapshot.status === "running" ||
+                entry?.restarting === true
+              );
+            },
           );
           if (pending.length === 0) return;
           onPending?.(pending);
@@ -556,7 +568,7 @@ const makeManager = Effect.gen(function* () {
   /** Interrupt one running entry, force-closing its scope after 5s. */
   const abortEntry = (entry: Entry) =>
     Effect.gen(function* () {
-      if (entry.snapshot.status !== "running") return;
+      if (entry.snapshot.status !== "running" && !entry.restarting) return;
       const graceful = yield* entry.session.interrupt.pipe(
         Effect.timeout(STOP_TIMEOUT_MS),
         Effect.result,
@@ -586,7 +598,9 @@ const makeManager = Effect.gen(function* () {
       const running = unique
         .map((id) => entries.get(id))
         .filter(
-          (entry): entry is Entry => entry?.snapshot.status === "running",
+          (entry): entry is Entry =>
+            entry?.snapshot.status === "running" ||
+            entry?.restarting === true,
         );
       const runningIds = running.map((entry) => entry.snapshot.id);
       // Mark consumed before interrupting so cancellation does not also
@@ -596,7 +610,13 @@ const makeManager = Effect.gen(function* () {
         yield* Effect.forEach(running, abortEntry, {
           concurrency: "unbounded",
         });
-        while (running.some((entry) => entry.snapshot.status === "running")) {
+        while (
+          running.some(
+            (entry) =>
+              entry.snapshot.status === "running" ||
+              entry.restarting === true,
+          )
+        ) {
           yield* nextChange;
         }
       });
@@ -629,6 +649,11 @@ const makeManager = Effect.gen(function* () {
           message: `Subagent "${id}" is no longer tracked.`,
         });
       }
+      if (entry.restarting) {
+        return new SendError({
+          message: `Subagent "${id}" is already restarting; wait until it is running before sending another message.`,
+        });
+      }
       // Restarting a settled subagent occupies a running slot again, so it
       // must respect the same cap as spawn. Steering an already-running one
       // does not consume additional capacity.
@@ -641,13 +666,16 @@ const makeManager = Effect.gen(function* () {
         // Occupy the slot synchronously: the RunStarted that flips status
         // arrives via the async pump, and two concurrent restarts must not
         // both pass the check in that window. Cleared by RunStarted/settle,
-        // or here when the backend rejects the send.
+        // or here when the send fails or is interrupted.
         entry.restarting = true;
         return entry.session.send(text).pipe(
-          Effect.onError(() =>
-            Effect.sync(() => {
-              entry.restarting = false;
-            }),
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit)
+              ? Effect.sync(() => {
+                  entry.restarting = false;
+                  notify(id);
+                })
+              : Effect.void,
           ),
         );
       }
